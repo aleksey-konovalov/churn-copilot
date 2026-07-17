@@ -6,6 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "shared-utils"
 version = "0.1.0"
 
-[tool.setuptools.packages.find]
-where = ["."]
+[tool.setuptools]
+packages = [
+    "shared",
+    "shared.utils"
+]
+
+[tool.setuptools.package-dir]
+"shared" = "."
+"shared.utils" = "utils"
 

@@ -25,13 +25,18 @@ def get_logger(
     # Защита от дублирования хендлеров при повторном импорте (важно для микросервисов)
     logger = logging.getLogger(name)
     
-    # Проверяем, есть ли уже хендлеры у этого логгера или у его родителя
-    has_handlers = logger.handlers
-    has_parent_handlers = any(p.handlers for p in logger.parent, logger.parent.parent) if logger.parent else False
-
-    if has_handlers or has_parent_handlers:
-        logger.setLevel(level)
+    # Если у логгера уже есть хендлеры, ничего не добавляем
+    if logger.handlers:
         return logger
+
+    # Проверяем родительские логгеры (чтобы дочерние не дублировали вывод)
+    parent = logger.parent
+    while parent is not None:
+        if parent.handlers:
+            # Устанавливаем уровень, но хендлеры не добавляем — родитель всё выведет
+            logger.setLevel(level)
+            return logger
+        parent = parent.parent
 
     # Уровень логирования
     level = log_level or int(os.getenv("LOG_LEVEL", logging.INFO))
