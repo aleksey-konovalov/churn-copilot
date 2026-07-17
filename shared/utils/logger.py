@@ -38,8 +38,18 @@ def get_logger(
             return logger
         parent = parent.parent
 
-    # Уровень логирования
-    level = log_level or int(os.getenv("LOG_LEVEL", logging.INFO))
+    # Уровень логирования (поддерживает как числа, так и строки тип 'DEBUG')
+    if log_level is not None:
+        level = log_level
+    else:
+        env_level = os.getenv("LOG_LEVEL", "INFO")
+        # Если в env число (например, "20")
+        if env_level.isdigit():
+            level = int(env_level)
+        # Если в env слово (например, "DEBUG")
+        else:
+            level = getattr(logging, env_level.upper(), logging.INFO)
+
     logger.setLevel(level)
 
     # Форматтеры
@@ -67,13 +77,13 @@ def get_logger(
             datefmt="%H:%M:%S"
         )
 
-    # 1. Обработчик для консоли
+    # Обработчик для консоли
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(level)
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
-    # 2. Обработчик для файла (зависит от ENV переменной LOG_TO_FILE)
+    # Обработчик для файла (зависит от ENV переменной LOG_TO_FILE)
     log_to_file = os.getenv("LOG_TO_FILE", "false").lower() in ("true", "1", "yes")
     
     if log_to_file:

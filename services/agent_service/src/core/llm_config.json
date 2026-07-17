@@ -1,0 +1,19 @@
+{
+  "local_qwen_agent": {
+    "provider": "vllm",
+    "model": "Qwen3.5",
+    "base_url": "http://localhost:8901/v1",
+    "api_key_env": "any",
+    "temperature":0.2,
+    "top_p":0.9
+  },
+  "summarizer": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "OPENAI_API_KEY", 
+    "temperature": 0.2,
+    "top_p":0.9
+  }
+}
+
