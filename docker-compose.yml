@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  churn_pred_service:
+    build: ./services/churn_pred_service
+    container_name: churn_pred_service
+    ports:
+      - "3010:3010"
+    volumes:
+      # Монтируем папку data_science внутрь контейнера для доступа к модели и test'y.
+      - ./data_science:/opt/data_science
+    environment:
+      - MODEL_PATH=/opt/data_science/artifacts/best_model.cbm
+      - DATA_PATH=/opt/data_science/data/raw/test.csv
+      - PYTHONPATH=/opt/data_science/src          # Для прямых импортов
+      - DATA_SCIENCE_SRC=/opt/data_science/src    # Для sys.path в коде      
+    restart: unless-stopped
+
