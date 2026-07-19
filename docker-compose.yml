@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   churn_pred_service:
     build: ./services/churn_pred_service

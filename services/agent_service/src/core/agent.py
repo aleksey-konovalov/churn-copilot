@@ -14,36 +14,11 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import HumanMessage
 
 from .llm_client import llm
-from .prompts import root_agent_prompt, churn_prediction_agent_prompt, policies_and_retention_rules_agent_prompt
+from .prompts import root_agent_prompt, policies_and_retention_rules_agent_prompt
+from .tools import get_churn_prediction
+# from .middleware import TrimMessagesMiddleware
+
 from shared.utils.logger import app_logger, get_logger
-
-# from tools import search_knowledge_base
-# from middleware import TrimMessagesMiddleware
-
-
-
-# =================   Суб-агент для получения и расшифровки сырых данных по оттоку.   =================
-
-churn_prediction_agent = create_agent(
-    llm,
-    # tools=[get_raw_churn_prediction],
-    system_prompt=churn_prediction_agent_prompt
-)
-# Тул, в рамках которого будет работать суб-агент churn_prediction_agent
-@tool(
-    "get_churn_prediction",
-    description="Используй для получения вероятности оттока, возможных причин и профиля клиента по его ID. \
-        Не используй для обычного диалога или приветствий."
-)
-async def get_churn_prediction(query: str):
-    app_logger.info(f"Задача передана агенту churn_prediction_agent")
-    result = await churn_prediction_agent.ainvoke(
-        {            
-            "messages": [{"role": "user", "content": query}],
-            "config": {"max_tool_calls": 5}
-        }
-    )
-    return f"Результат по твоему запросу {query}: \n{result['messages'][-1].content.split('</think>')[-1].strip()}"
 
 
 # =========  Суб-агент для получения экспертизы по корпоративным политикам и маркетинговым предложениям по удержанию.  =========
