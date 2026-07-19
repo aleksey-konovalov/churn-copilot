@@ -1,7 +1,7 @@
 import os
 import json
+import httpx
 import asyncio
-import requests
 from langchain.tools import tool
 
 from shared.utils.validators import parse_and_validate_client_id
@@ -27,24 +27,26 @@ async def get_churn_prediction(client_id: str):
     try:
         client_id = parse_and_validate_client_id(client_id)
 
-        # Делаем GET запрос к нашему FastAPI сервису
-        response = requests.get(url, params={"client_id": client_id}, timeout=5)
-        
-        # Если статус-код 200 - отдаем JSON строкой
-        if response.status_code == 200:
-            churn_pred_data = response.json()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params={"client_id": client_id}, timeout=5.0)
             
-        # Если 404 - значит такого ID не существует в нашей выборке
-        elif response.status_code == 404:
-            error_detail = response.json().get("detail", "Клиент не найден")
-            return f"Ошибка: {error_detail}"
-                       
-    except requests.exceptions.ConnectionError:
+            # Если статус-код 200 - отдаем JSON строкой
+            if response.status_code == 200:
+                churn_pred_data = response.json()
+                # Лучше возвращать результат сразу, чтобы избежать UnboundLocalError
+                return generate_report(churn_pred_data)
+                
+            # Если 404 - значит такого ID не существует в нашей выборке
+            elif response.status_code == 404:
+                error_detail = response.json().get("detail", "Клиент не найден")
+                return f"Ошибка: {error_detail}"
+            else:
+                # Обработка других статус-кодов (например, 500)
+                return f"Ошибка: prediction-сервис вернул статус {response.status_code}"
+                   
+    except httpx.ConnectError:
         return "Ошибка: Не удалось подключиться к prediction-сервису. Убедитесь, что Docker-контейнер сервиса запущен."
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         return "Ошибка: Превышено время ожидания ответа от prediction-сервиса."
     except Exception as e:
         return f"Непредвиденная ошибка при обращении к prediction-сервису: {str(e)}"
-
-    return generate_report(churn_pred_data)
-
