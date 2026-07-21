@@ -49,3 +49,17 @@ def generate_report(json_data):
         )
 
     return "\n".join(lines)
+
+def build_complex_query_from_reasons(json_data):
+    """Собирает комплексный запрос для RAG из top_reasons"""
+    query_parts = []
+    for reason in json_data.get("top_reasons", []):
+        feature = reason.get("feature")
+        feature_value = reason.get("feature_value")
+        
+        description = FEATURE_MAP.get(feature, feature.replace("_", " "))
+        formatted_value = format_feature_value(feature, feature_value)
+        
+        query_parts.append(f"{description}: {formatted_value}")
+        
+    return " | ".join(query_parts)
