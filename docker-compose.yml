@@ -25,7 +25,8 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - DEVICE=gpu
+      - DEVICE=cuda
+      - EMBEDDING_SERVICE_URL=http://embedding_service:3020
       - EMBEDDER_TYPE=frida
       - MODEL_PATH=ai-forever/FRIDA
       - TOKENIZER_MAX_LENGTH=512
@@ -69,6 +70,28 @@ services:
       - ./infra/qdrant/storage:/qdrant/storage       # Хранение векторных баз
       - ./infra/qdrant/snapshots:/qdrant/snapshots   # Хранение снапшотов
     restart: unless-stopped
+
+  rag_indexing_service:
+    profiles: ["rag_indexing"]
+    build: 
+      context: .
+      dockerfile: ./services/rag_indexing_service/Dockerfile    
+    container_name: rag_indexing_service
+    volumes:
+      - ./data/rag:/data/rag:ro
+    environment:
+      - RAG_DATA_DIR=/data/rag
+      - EMBEDDING_SERVICE_URL=http://embedding_service:3020
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=policies
+      - QDRANT_SPACE_NAME=text_vector
+      - VECTOR_SIZE=1536
+      - EMBEDDING_BATCH_SIZE=16
+      - SERVICE_NAME=rag_indexing_service
+    depends_on:
+      - embedding_service
+      - qdrant
+    restart: "no"
 
 volumes:
   app-cache:
