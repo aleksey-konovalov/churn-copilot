@@ -14,3 +14,35 @@ services:
       - DATA_SCIENCE_SRC=/opt/data_science/src    # Для sys.path в коде      
     restart: unless-stopped
 
+  vllm:
+    build:
+      context: ./services/vllm
+      dockerfile: Dockerfile
+    container_name: vllm
+    env_file:
+      - ./services/vllm/.env  # Для варьирования параметров без ребилда
+    ports:
+      - "3040:3040"
+    volumes:
+      - vllm-models:/root/.cache/huggingface # Чтобы не качать модель заново каждый раз
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.2
+    user: "${UID:-1000}:${GID:-1000}"    
+    ports:
+      - "3030:6333"
+    volumes:
+      - ./infra/qdrant/storage:/qdrant/storage       # Хранение векторных баз
+      - ./infra/qdrant/snapshots:/qdrant/snapshots   # Хранение снапшотов
+    restart: unless-stopped
+
+volumes:
+  app-cache:
+  vllm-models:
