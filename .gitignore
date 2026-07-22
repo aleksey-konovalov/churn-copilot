@@ -6,6 +6,12 @@ app-cache/
 *.csv
 *.cbm
 
+# Qdrant
+infra/qdrant/storage/*
+!infra/qdrant/storage/.gitkeep
+infra/qdrant/snapshots/*
+!infra/qdrant/snapshots/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

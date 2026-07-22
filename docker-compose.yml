@@ -14,3 +14,16 @@ services:
       - DATA_SCIENCE_SRC=/opt/data_science/src    # Для sys.path в коде      
     restart: unless-stopped
 
+  qdrant:
+    image: qdrant/qdrant:v1.16.2
+    user: "${UID:-1000}:${GID:-1000}"    
+    ports:
+      - "3030:6333"
+    volumes:
+      - ./infra/qdrant/storage:/qdrant/storage       # Хранение векторных баз
+      - ./infra/qdrant/snapshots:/qdrant/snapshots   # Хранение снапшотов
+    restart: unless-stopped
+
+volumes:
+  app-cache:
+  vllm-models:
