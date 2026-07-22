@@ -33,11 +33,11 @@ def get_logger(
     parent = logger.parent
     while parent is not None:
         if parent.handlers:
-            # Устанавливаем уровень, но хендлеры не добавляем — родитель всё выведет
-            logger.setLevel(level)
+            # Устанавливаем уровень родителя, но хендлеры не добавляем
+            logger.setLevel(parent.level)
             return logger
         parent = parent.parent
-
+        
     # Уровень логирования (поддерживает как числа, так и строки тип 'DEBUG')
     if log_level is not None:
         level = log_level

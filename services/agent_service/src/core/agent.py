@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import HumanMessage
 
 from .llm_client import llm
-from .prompts import root_agent_prompt, policies_and_retention_rules_agent_prompt
+from .prompts import root_agent_prompt, churn_analisys_and_retention_agent_prompt
 from .tools import get_churn_info
 # from .middleware import TrimMessagesMiddleware
 
@@ -26,7 +26,7 @@ from shared.utils.logger import app_logger, get_logger
 churn_analisys_and_retention_agent = create_agent(
     llm,
     tools=[get_churn_info],
-    system_prompt=policies_and_retention_rules_agent_prompt
+    system_prompt=churn_analisys_and_retention_agent_prompt
 )
 # Тул, в рамках которого будет работать суб-агент policies_and_retention_rules_agent
 @tool(

@@ -12,6 +12,10 @@ from dotenv import load_dotenv, find_dotenv
 from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
+from shared.utils.logger import get_logger
+
+logger = get_logger("embedding_service.server")
+
 warnings.filterwarnings("ignore", message=".*torch.backends.cuda.sdp_kernel.*deprecated.*", category=FutureWarning)
 load_dotenv(find_dotenv())
 
@@ -110,6 +114,7 @@ EMBEDDERS = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if EMBEDDER_TYPE not in EMBEDDERS:
+        logger.error(f"Unknown EMBEDDER_TYPE={EMBEDDER_TYPE!r}, expected one of {list(EMBEDDERS)}")
         raise RuntimeError(
             f"Unknown EMBEDDER_TYPE={EMBEDDER_TYPE!r}, "
             f"expected one of {list(EMBEDDERS)}"
@@ -117,9 +122,9 @@ async def lifespan(app: FastAPI):
     embedder = EMBEDDERS[EMBEDDER_TYPE](MODEL_PATH)
     embedder.load()
     app.state.embedder = embedder
-    print(f"[Embedding Service] {EMBEDDER_TYPE}:{MODEL_PATH} successfully loaded.")
+    logger.info(f"[Embedding Service] {EMBEDDER_TYPE}:{MODEL_PATH} successfully loaded.")
     yield
-    print("[Embedding Service] Shutting down.")
+    logger.info("[Embedding Service] Shutting down.")
 
 
 app = FastAPI(title="Embedding Service", lifespan=lifespan)
@@ -148,6 +153,7 @@ async def get_embeddings(request: EmbeddingRequest):
         )
         return {"embeddings": embeddings}
     except Exception as e:
+        logger.error(f"Ошибка при генерации эмбеддингов: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

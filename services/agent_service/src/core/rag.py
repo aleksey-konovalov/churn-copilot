@@ -3,7 +3,7 @@ import time
 import asyncio
 from qdrant_client import AsyncQdrantClient
 
-from embedding_service import embedding_client
+from embedding_service.src.client import embedding_client
 from shared.utils.logger import app_logger
 
 # Конфигурация
@@ -78,7 +78,7 @@ async def search_qdrant(query_variants: list[str], limit: int = MAX_TOTAL_CHUNKS
             return "По вашему запросу ничего не найдено в базе знаний."
 
         top_score = max(res['max_score'] for res in unique_results.values())
-        score_threshold = max(top_score - top_score * 0.80, MIN_ABSOLUTE_SCORE)
+        score_threshold = max(top_score * 0.8, MIN_ABSOLUTE_SCORE)
         
         final_chunks = []
         for res in unique_results.values():
@@ -90,8 +90,8 @@ async def search_qdrant(query_variants: list[str], limit: int = MAX_TOTAL_CHUNKS
                 })
         
         final_chunks.sort(key=lambda x: x['score'], reverse=True)
-        final_chunks = final_chunks[:MAX_TOTAL_CHUNKS - limit + MAX_TOTAL_CHUNKS] # Ограничение
-        
+        final_chunks = final_chunks[:limit] # Ограничение по лимиту
+
         # Форматирование
         context = ""
         for i, item in enumerate(final_chunks):

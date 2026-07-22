@@ -26,12 +26,16 @@ RUN groupadd -r $APP_USER && \
 RUN pip install --upgrade pip
 
 # Установка Python зависимостей
-COPY --chown=$APP_USER:$APP_USER requirements.txt .
+COPY --chown=$APP_USER:$APP_USER services/embedding_service/requirements.txt .
 RUN --mount=type=cache,target=/tmp/pip-cache,sharing=locked \
     pip install --cache-dir /tmp/pip-cache -r requirements.txt
 
+# Устанавливаем shared-utils
+COPY ./shared /app/shared
+RUN pip install --no-cache-dir /app/shared
+
 # Копирование кода
-COPY --chown=$APP_USER:$APP_USER src/ ./src/
+COPY --chown=$APP_USER:$APP_USER services/embedding_service/src/ ./src/
 
 # Заранее создаем папку для кэша и даем на нее права пользователю,
 # чтобы смонтированный Docker volume (app-cache) имел правильные владельца.
