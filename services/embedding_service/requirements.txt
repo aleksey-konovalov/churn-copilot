@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+python-dotenv
+transformers
+sentence-transformers
+torch
+einops
+# For Giga-Embeddings-instruct-4bit-nf4
+bitsandbytes
+accelerate
