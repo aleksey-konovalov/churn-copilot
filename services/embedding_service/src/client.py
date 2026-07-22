@@ -2,6 +2,10 @@ import os
 import httpx
 from typing import List, Literal
 
+from shared.utils.logger import get_logger
+
+logger = get_logger("embedding_service.client")
+
 EMBEDDING_SERVICE_URL = os.getenv('EMBEDDING_SERVICE_URL', 'http://embedding_service:3020').rstrip('/')
 
 class EmbeddingClient:
@@ -18,6 +22,7 @@ class EmbeddingClient:
         task: Literal['search_document', 'search_marker']
     ) -> List[List[float]]:
         """Получение эмбеддингов из сервиса."""
+        logger.debug(f"Запрос эмбеддингов для {len(texts)} текстов с task: {task}")
         try:
             response = await self.client.post(
                 f"{self.base_url}/embeddings",
@@ -25,10 +30,13 @@ class EmbeddingClient:
             )
             response.raise_for_status()
             data = response.json()
+            logger.debug(f"Успешно получены эмбеддинги")
             return data["embeddings"]
         except httpx.HTTPStatusError as e:
-            # Логируем тело ответа для удобства дебага
-            print(f"Embedding service error: {e.response.text}")
+            logger.error(f"Embedding service error: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка в EmbeddingClient: {str(e)}", exc_info=True)
             raise
             
     async def health_check(self) -> bool:
@@ -45,4 +53,3 @@ class EmbeddingClient:
 
 # Глобальный экземпляр для импорта
 embedding_client = EmbeddingClient()
-

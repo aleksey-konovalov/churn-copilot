@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embedding-service"
+version = "0.1.0"
+
+[tool.setuptools]
+packages = [
+    "embedding_service",
+    "embedding_service.src"
+]
+
+[tool.setuptools.package-dir]
+"embedding_service" = "."
+"embedding_service.src" = "src"
+
