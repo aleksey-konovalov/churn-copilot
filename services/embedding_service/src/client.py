@@ -2,7 +2,7 @@ import os
 import httpx
 from typing import List, Literal
 
-EMBEDDING_SERVICE_URL = os.getenv('EMBEDDING_SERVICE_URL', 'http://localhost:3020').rstrip('/')
+EMBEDDING_SERVICE_URL = os.getenv('EMBEDDING_SERVICE_URL', 'http://embedding_service:3020').rstrip('/')
 
 class EmbeddingClient:
     """Асинхронный клиент для запросов к embedding-сервису с переиспользованием соединений."""
