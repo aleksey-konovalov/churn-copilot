@@ -95,6 +95,22 @@ services:
       - qdrant
     restart: "no"
 
+  dev-tools:
+    image: python:3.10-slim
+    working_dir: /app
+    profiles: ["assets"]
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./:/app  # Пробрасываем весь проект, чтобы скрипт видел .env и мог разложить файлы
+    env_file:
+      - ./shared/.env
+    # Добавляем переменные UID и GID, чтобы не было конфликтов прав доступа при создании файлов      
+    environment:
+      - HOME=/tmp
+      - UID=${UID:-1000}
+      - GID=${GID:-1000}
+      - PYTHONPATH=/tmp/packages:/app
+
 volumes:
   app-cache:
   vllm-models:
