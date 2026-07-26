@@ -21,20 +21,20 @@
 ## Архитектура
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Менеджер  →  Gradio UI (:7860)  →  root_agent (LangGraph)       │
-│                                         │                        │
-│                    get_churn_analisys_and_retention (sub-agent)  │
-│                                         │                        │
-│                              get_churn_info (tool)               │
-│                    ┌────────────────────┼────────────────────┐   │
-│                    ▼                    ▼                    ▼   │
-│           churn_pred :3010     embedding_service      vLLM :3040 │
-│           CatBoost + SHAP               │            Qwen3.6     │
-│                                         ▼                        │
-│                                    RAG-поиск                     │
-│                                   Qdrant :3030                   │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ Менеджер  →  Gradio UI (:7860)  →  root_agent (LangGraph)                       │
+│                                         │                                       │
+│                     get_churn_analisys_and_retention (sub-agent)                │
+│                                         │                                       │
+│                                 get_churn_info (tool)                           │
+│                    ┌────────────────────┼────────────────────┐                  │
+│                    ▼                    ▼                    ▼                  │
+│           churn_pred :3010     embedding_service      vLLM :3040                │
+│           CatBoost + SHAP               │              Qwen3.6                  │
+│                                         ▼                                       │
+│                                    RAG-поиск                                    │
+│                                   Qdrant :3030                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 | Сервис | Порт | Назначение |
@@ -45,6 +45,7 @@
 | `vllm` | 3040 | Локальный LLM (OpenAI-compatible API) |
 | `agent_service` | 7860 | Gradio-чат (запуск локально) |
 | `rag_indexing_service` | — | Batch-индексация (Docker profile) |
+| `dev-tools` | — | Скачивание ассетов и снапшотов (Docker profile) |
 
 **Multi-agent design:** корневой агент ведёт диалог и делегирует экспертизу суб-агенту удержания. Каждый уровень имеет узкий набор tools и жёсткие промпты (запрет на выдумывание ID, политик, профилей).
 
@@ -75,6 +76,65 @@ churn_copilot/
 │   ├── rag_indexing_service/   # One-shot indexer
 │   └── vllm/                   # Qwen3.6 через vLLM
 └── shared/                     # Общий Python-пакет (constants, logger, validators)
+```
+
+---
+
+## Быстрый старт
+
+### Требования
+
+- Docker + docker-compose, **NVIDIA Container Toolkit** (GPU для vLLM и embeddings)
+- Python 3.10 (для `agent_service`)
+- Датасет Kaggle в `data_science/data/raw/`
+- Обученная модель `data_science/artifacts/best_model.cbm`
+- Политики удержания в `data/rag/*.txt` (для RAG)
+
+### Подготовка ассетов (модель, датасеты, Qdrant)
+
+Чтобы не коммитить ассеты (веса моделей, датасеты, снапшоты Qdrant), проект содержит Makefile для автоматизации их скачивания из Google Drive.
+
+**1. Скачивание файлов:**
+```bash
+make download-assets
+```
+Скрипт прочитает конфигурацию из `shared/.env` (`GOOGLE_DRIVE_MODEL_ID`, `GOOGLE_DRIVE_TRAIN_ID` и др.), скачает файлы и разложит их по нужным директориям (`data_science/`, `infra/qdrant/`). Существующие файлы пропускаются.
+
+**2. Восстановление Qdrant из снапшота:**
+После скачивания снапшота разверните коллекцию в Qdrant:
+```bash
+make restore-qdrant
+```
+Команда (при необходимости) запускает скачивание ассетов, поднимает контейнер Qdrant, копирует `snapshot.snapshot` внутрь контейнера через `docker cp`, инициирует восстановление коллекции через REST API и корректно останавливает контейнер, если он не был запущен до этого.
+
+**3. Сохранение снапшота Qdrant:**
+Если вы обновили векторную базу (добавили новые политики) и хотите создать резервную копию:
+```bash
+make save-snapshot
+```
+Команда запросит создание снапшота у работающего сервиса Qdrant, достанет файл из контейнера и сохранит его локально в `infra/qdrant/snapshots/{COLLECTION_NAME}/snapshot.snapshot`. После этого файл можно загрузить на Google Drive и обновить `GOOGLE_DRIVE_QDRANT_SNAPSHOT_ID` в `.env`.
+
+### 1. Инфраструктура:
+
+```bash
+docker compose up -d churn_pred_service embedding_service vllm qdrant
+```
+
+### 2. Индексация политик (при обновлении документов для RAG, один раз)
+
+```bash
+docker compose --profile rag_indexing up rag_indexing_service
+```
+
+> Убедитесь, что `COLLECTION_NAME` в `.env` агента совпадает с `QDRANT_COLLECTION` в compose (`policies`).
+
+### 3. Запуск фронта с агентом
+
+```bash
+cd services/agent_service
+cp env.example .env
+pip install -r requirements.txt gradio
+python src/main.py   # → http://localhost:7860
 ```
 
 ---
@@ -166,40 +226,7 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 
 ---
 
-## Быстрый старт
-
-### Требования
-
-- Docker + docker-compose, **NVIDIA Container Toolkit** (GPU для vLLM и embeddings)
-- Python 3.10 (для `agent_service`)
-- Датасет Kaggle в `data_science/data/raw/`
-- Обученная модель `data_science/artifacts/best_model.cbm`
-- Политики удержания в `data/rag/*.txt` (для RAG)
-
-### 1. Инфраструктура
-
-```bash
-docker compose up -d churn_pred_service embedding_service vllm qdrant
-```
-
-### 2. Индексация политик (один раз)
-
-```bash
-docker compose --profile rag_indexing up rag_indexing_service
-```
-
-> Убедитесь, что `COLLECTION_NAME` в `.env` агента совпадает с `QDRANT_COLLECTION` в compose (`policies`).
-
-### 3. Агент
-
-```bash
-cd services/agent_service
-cp env.example .env
-pip install -r requirements.txt gradio
-python src/main.py   # → http://localhost:7860
-```
-
-### Пример диалога
+## Пример диалога
 
 > «Почему может уйти клиент 42?»
 
