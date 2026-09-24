@@ -1,7 +1,13 @@
-langchain==1.0.0
-langchain-core==1.0.0
-langchain-openai==1.0.0
-langgraph==1.0.1
+langchain==1.4.2
+langchain-core==1.6.4
+langchain-openai==1.6.5
+langgraph==1.2.12
+# 3.1.x требует langgraph-checkpoint>=4 — совместимо с langgraph 1.2.x (но НЕ с langgraph 1.0.x)
+langgraph-checkpoint-sqlite==3.1.1
+aiosqlite==0.22.1
 python-dotenv==1.1.1
 httpx==0.28.1
 qdrant-client==1.16.2
+# FastAPI + uvicorn: mount_gradio_app и lifespan (управление checkpointer'ом)
+fastapi==0.139.2
+uvicorn==0.38.0

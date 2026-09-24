@@ -7,6 +7,9 @@ app-cache/
 *.csv
 *.cbm
 
+# Agent service: persistent память (SQLite checkpointer)
+services/agent_service/checkpoints.db*
+
 # Qdrant
 infra/qdrant/storage/*
 !infra/qdrant/storage/.gitkeep

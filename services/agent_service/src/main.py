@@ -1,40 +1,71 @@
-import sys
-import asyncio
-import gradio as gr
-from pathlib import Path
+"""
+Точка входа Agent Service: Gradio UI, смонтированный в FastAPI.
 
+Lifespan управляет краткосрочной памятью агента: при старте открывает
+SQLite checkpointer, при остановке закрывает соединение.
+"""
+import os
+import uuid
+from contextlib import asynccontextmanager
+
+import gradio as gr
+import uvicorn
+from fastapi import FastAPI
 from langchain_core.messages import HumanMessage
 
-# Импорт логгера из shared
 from shared.utils.logger import get_logger
+from shared.utils.text import sanitize_llm_text
 
-# Импорт логики агента
-from core.agent import root_agent
+from core.agent import get_root_agent, init_root_agent, shutdown_root_agent
+from core.callbacks import TokenUsageCallback
 
-# Настраиваем логгер один раз при старте
-logger = get_logger(name="agent")
+logger = get_logger(name="agent_service.main")
 
 
-async def respond(message_text, history):
-    # Вызываем логику из core/agent.py
-    agent_response = await root_agent.ainvoke(
-            {"messages": [HumanMessage(message_text)]},                             #  + prompt_suffix
-            config={"configurable": {"thread_id": 0}, "max_tool_calls": 5}          # thread_id
-        )                      
-    # Извлечение ответа агента
-    agent_answer = agent_response['messages'][-1].content.split('</think>')[-1].strip() 
-    return agent_answer
+async def respond(message_text, history, session_state):
+    # Каждая сессия браузера = отдельный thread_id: диалоги пользователей изолированы
+    if "thread_id" not in session_state:
+        session_state["thread_id"] = str(uuid.uuid4())
+        session_state["user_id"] = os.getenv("DEFAULT_USER_ID", "manager_default")
 
-def main():
-    logger.info("Запуск Agent Service UI (Gradio)...")
-    
-    # Настройка Gradio
-    with gr.Blocks() as demo:
-        chatbot = gr.ChatInterface(respond, title="Churn Copilot Agent")
-        
-    # Запуск
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    root_agent = get_root_agent()
+    if root_agent is None:
+        return "Агент ещё инициализируется, повторите запрос через пару секунд."
+
+    result = await root_agent.ainvoke(
+        {"messages": [HumanMessage(message_text)]},
+        config={
+            "configurable": {
+                "thread_id": session_state["thread_id"],
+                "user_id": session_state["user_id"],
+            },
+            "metadata": {"thread_id": session_state["thread_id"]},
+            "callbacks": [TokenUsageCallback()],
+        },
+    )
+    return sanitize_llm_text(result["messages"][-1].content)
+
+
+def build_ui() -> gr.Blocks:
+    return gr.ChatInterface(
+        respond,
+        title="Churn Copilot Agent",
+        # gr.State(value={}) — собственный экземпляр состояния на каждую сессию браузера
+        additional_inputs=[gr.State(value={})],
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_root_agent()
+    logger.info("Agent Service готов к работе")
+    yield
+    await shutdown_root_agent()
+
+
+app = FastAPI(lifespan=lifespan)
+app = gr.mount_gradio_app(app, build_ui(), path="/")
 
 if __name__ == "__main__":
-    main()
-
+    logger.info("Запуск Agent Service UI (Gradio) на http://0.0.0.0:7860")
+    uvicorn.run(app, host="0.0.0.0", port=7860)

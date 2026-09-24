@@ -27,6 +27,12 @@ if [ "${ENABLE_PREFIX_CACHING}" = "true" ]; then
     CMD="${CMD} --enable-prefix-caching"
 fi
 
+# Парсинг reasoning-тегов на стороне сервера: reasoning уходит в отдельное поле
+# reasoning_content и не попадает в content / историю диалога
+if [ -n "${REASONING_PARSER}" ]; then
+    CMD="${CMD} --reasoning-parser ${REASONING_PARSER}"
+fi
+
 echo "Starting vLLM with command:"
 echo "$CMD"
 

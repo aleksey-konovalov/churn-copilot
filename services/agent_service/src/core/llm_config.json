@@ -4,16 +4,28 @@
     "model": "Qwen3.6",
     "base_url": "http://localhost:3040/v1",
     "api_key_env": "any",
-    "temperature":0.2,
-    "top_p":0.9
+    "temperature": 0.2,
+    "top_p": 0.9
+  },
+  "local_qwen_summarizer": {
+    "provider": "vllm",
+    "model": "Qwen3.6",
+    "base_url": "http://localhost:3040/v1",
+    "api_key_env": "any",
+    "temperature": 0.1,
+    "top_p": 0.9,
+    "extra_body": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    }
   },
   "summarizer": {
     "provider": "openai",
     "model": "gpt-4o-mini",
     "base_url": "https://api.openai.com/v1",
-    "api_key_env": "OPENAI_API_KEY", 
+    "api_key_env": "OPENAI_API_KEY",
     "temperature": 0.2,
-    "top_p":0.9
+    "top_p": 0.9
   }
 }
-

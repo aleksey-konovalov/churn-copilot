@@ -23,7 +23,7 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
     """
     if profile_name is None:
         profile_name = os.getenv("ACTIVE_LLM_PROFILE")
-        
+
     if not profile_name:
         raise ValueError("Не задано имя профиля. Укажите ACTIVE_LLM_PROFILE в .env или передайте в функцию.")
 
@@ -34,7 +34,7 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
 
     profile_config = config[profile_name]
 
-    # Извлекаем API ключ. 
+    # Извлекаем API ключ.
     # Если в конфиге "api_key_env": "OPENAI_API_KEY", он возьмет ключ из os.environ.
     # Если "api_key_env": "any" — переменной "any" в окружении нет, и os.getenv вернет саму строку "any".
     api_key_env_name = profile_config.get("api_key_env")
@@ -44,6 +44,9 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
     temperature = float(profile_config.get("temperature", 0.2))
     top_p = float(profile_config.get("top_p", 0.9))
 
+    # Дополнительные параметры провайдера (например, chat_template_kwargs для vLLM)
+    extra_body = profile_config.get("extra_body")
+
     # Инициализация клиента
     llm = ChatOpenAI(
         model=profile_config["model"],
@@ -51,9 +54,28 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
         api_key=api_key,
         temperature=temperature,
         top_p=top_p,
+        extra_body=extra_body,
     )
 
     return llm
+
+def get_optional_llm_client(profile_name: str) -> ChatOpenAI | None:
+    """
+    Клиент из профиля или None, если профиль не существует или его API-ключ не задан.
+
+    Используется для опциональных контуров (например, ModelFallbackMiddleware):
+    сервис должен подниматься без ключа, просто без fallback-модели.
+    Профили с "api_key_env": "any" считаются настроенными всегда (ключ не нужен).
+    """
+    profile_config = load_config().get(profile_name)
+    if not profile_config:
+        return None
+
+    api_key_env_name = profile_config.get("api_key_env")
+    if api_key_env_name and api_key_env_name != "any" and not os.getenv(api_key_env_name):
+        return None
+
+    return get_llm_client(profile_name)
 
 # Глобальная инициализация для импорта в других файлах
 # В .env должна быть определена переменная ACTIVE_LLM_PROFILE
@@ -62,4 +84,4 @@ CURRENT_PROFILE = os.getenv("ACTIVE_LLM_PROFILE")
 if CURRENT_PROFILE:
     llm = get_llm_client(CURRENT_PROFILE)
 else:
-    raise ValueError("env-переменная ACTIVE_LLM_PROFILE не определена")  # Или можно сделать llm = None     
+    raise ValueError("env-переменная ACTIVE_LLM_PROFILE не определена")  # Или можно сделать llm = None
