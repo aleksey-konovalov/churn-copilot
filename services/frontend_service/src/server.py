@@ -40,7 +40,7 @@ app = FastAPI(title="Churn Copilot Frontend Service", lifespan=lifespan)
 _SKIP_HEADERS = {"content-length", "transfer-encoding", "connection"}
 
 
-@app.api_route("/api/{path:path}", methods=["GET", "POST"])
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy_api(path: str, request: Request):
     """Прозрачный потоковый прокси /api/* на agent_service."""
     url = f"/api/{path}"

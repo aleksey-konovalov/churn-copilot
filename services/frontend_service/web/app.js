@@ -20,6 +20,129 @@ const ICONS = {
 
 const icon = (name) => ICONS[name] || "";
 
+/* ---------- мини-markdown (без зависимостей) ----------
+   Источник — ответы LLM: заголовки, **жирный**, *курсив*, `код`,
+   таблицы, списки, цитаты, fenced-код, ---. Весь текст экранируется
+   до разметки, теги добавляет только рендерер — XSS исключён. */
+
+function mdInline(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?:;)»])/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+function mdToHtml(src) {
+  // LLM иногда клеит заголовок к предыдущему предложению («…3 месяцев.## Разбор»):
+  // переносим такую разметку на новую строку после знака препинания (компромисс
+  // в пользу снисходительности; в коде-блоках такой паттерн практически не встречается)
+  const lines = esc(src)
+    .replace(/\r\n?/g, "\n")
+    .replace(/([.!?:;)»%])(#{1,6}\s)/g, "$1\n$2")
+    .split("\n");
+  const out = [];
+  let para = [];
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${para.map(mdInline).join("<br>")}</p>`);
+      para = [];
+    }
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushPara();
+      const lvl = Math.min(heading[1].length, 4);
+      out.push(`<h${lvl}>${mdInline(heading[2])}</h${lvl}>`);
+      i++;
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushPara();
+      out.push("<hr>");
+      i++;
+      continue;
+    }
+    // Таблица: строка с |, за которой следует разделитель |---|
+    if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      flushPara();
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        rows.push(lines[i]);
+        i++;
+      }
+      const cells = (row) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => mdInline(c.trim()));
+      let table = `<table><thead><tr>${cells(rows[0]).map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>`;
+      for (const row of rows.slice(2)) {
+        table += `<tr>${cells(row).map((c) => `<td>${c}</td>`).join("")}</tr>`;
+      }
+      out.push(`${table}</tbody></table>`);
+      continue;
+    }
+    const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const bulleted = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ordered || bulleted) {
+      flushPara();
+      const re = ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/;
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(re);
+        if (!m) break;
+        items.push(mdInline(m[1].trim()));
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.map((t) => `<li>${t}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      flushPara();
+      const quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(mdInline(lines[i].replace(/^\s*>\s?/, "")));
+        i++;
+      }
+      out.push(`<blockquote>${quote.join("<br>")}</blockquote>`);
+      continue;
+    }
+    if (/^\s*```/.test(line)) {
+      flushPara();
+      i++;
+      const code = [];
+      while (i < lines.length && !/^\s*```/.test(lines[i])) {
+        code.push(lines[i]);
+        i++;
+      }
+      i++; // закрывающая ```
+      out.push(`<pre><code>${code.join("\n")}</code></pre>`);
+      continue;
+    }
+    if (!line.trim()) {
+      flushPara();
+      i++;
+      continue;
+    }
+    para.push(line);
+    i++;
+  }
+  flushPara();
+  return out.join("");
+}
+
+/** Рендер markdown в узел с троттлингом через rAF: стрим токенов не пересобирает DOM на каждый чанк. */
+function mdInto(node, raw) {
+  node._mdRaw = raw;
+  if (node._mdRaf) return;
+  node._mdRaf = requestAnimationFrame(() => {
+    node._mdRaf = 0;
+    node.innerHTML = mdToHtml(node._mdRaw);
+  });
+}
+
 const fmtRisk = (p) => (typeof p === "number" ? p.toFixed(2) : "—");
 
 const fmtMoney = (v) => (typeof v === "number" ? v.toLocaleString("ru-RU", { maximumFractionDigits: 0 }) : "—");
@@ -55,6 +178,7 @@ const state = {
   panelOpen: false,         // правая панель: анализ оттока / карточка клиента
   panelClientId: null,      // какой клиент открыт в панели
   panelTab: "razbor",       // razbor | card
+  confirmDelete: null,      // thread_id с нажатой «×» (второй клик удаляет)
 };
 
 function newAnalysis(client) {
@@ -150,11 +274,16 @@ function groupThreads(threads) {
     }
     const time = new Date(t.updated_at);
     const timeText = Number.isNaN(time.getTime()) ? "" : time.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    const confirming = state.confirmDelete === t.thread_id;
     html += `
-      <button type="button" class="item ${t.thread_id === state.threadId ? "active" : ""}" data-thread="${esc(t.thread_id)}">
-        <span class="item-title">${esc(t.title)}</span>
-        <span class="item-time">${esc(timeText)}</span>
-      </button>`;
+      <div class="item ${t.thread_id === state.threadId ? "active" : ""} ${confirming ? "confirm" : ""}">
+        <button type="button" class="item-main" data-thread="${esc(t.thread_id)}">
+          <span class="item-title">${esc(t.title)}</span>
+          ${confirming ? '<span class="item-time">удалить?</span>' : `<span class="item-time">${esc(timeText)}</span>`}
+        </button>
+        <button type="button" class="item-del" data-del="${esc(t.thread_id)}"
+                aria-label="Удалить чат">${confirming ? "Да" : icon("x")}</button>
+      </div>`;
   }
   return html;
 }
@@ -333,8 +462,8 @@ function addMessageNode(role, text) {
     node.innerHTML = `<div class="bubble"></div>`;
     node.firstElementChild.textContent = text;
   } else {
-    node.innerHTML = `<div class="answer"></div>`;
-    node.firstElementChild.textContent = text;
+    node.innerHTML = `<div class="answer md"></div>`;
+    node.firstElementChild.innerHTML = mdToHtml(text);
   }
   stream.appendChild(node);
   scrollStream();
@@ -371,20 +500,29 @@ async function sendMessage() {
   aiNode.className = "msg ai";
   stream.appendChild(aiNode);
   let currentAnswer = null;
+  let rawAnswer = "";
 
   const ensureAnswer = () => {
     if (!currentAnswer) {
       currentAnswer = document.createElement("div");
-      currentAnswer.className = "answer";
+      currentAnswer.className = "answer md";
       aiNode.appendChild(currentAnswer);
     }
     return currentAnswer;
+  };
+
+  const showPlain = (message) => {
+    // Ошибки — без markdown: сырой текст исключения не должен размечаться
+    const answer = ensureAnswer();
+    answer.classList.add("error");
+    answer.textContent = (rawAnswer ? `${rawAnswer}\n\n` : "") + message;
   };
 
   try {
     await sse("/api/chat", { thread_id: state.threadId, message: text }, (ev) => {
       if (ev.type === "tool" && ev.phase === "start") {
         currentAnswer = null;
+        rawAnswer = "";
         typing.remove();
         const chip = document.createElement("div");
         chip.className = "toolchip";
@@ -399,22 +537,18 @@ async function sendMessage() {
         }
       } else if (ev.type === "token") {
         typing.remove();
-        const answer = ensureAnswer();
-        answer.textContent += ev.text;
+        rawAnswer += ev.text;
+        mdInto(ensureAnswer(), rawAnswer);
         scrollStream();
       } else if (ev.type === "error") {
         typing.remove();
-        const answer = ensureAnswer();
-        answer.classList.add("error");
-        answer.textContent += (answer.textContent ? "\n\n" : "") + `Ошибка: ${ev.message}`;
+        showPlain(`Ошибка: ${ev.message}`);
       }
     });
     await loadThreads();
     renderSidebar();
   } catch (e) {
-    const answer = ensureAnswer();
-    answer.classList.add("error");
-    answer.textContent += (answer.textContent ? "\n\n" : "") + `Ошибка: ${e.message}`;
+    showPlain(`Ошибка: ${e.message}`);
   } finally {
     typing.remove();
     state.sending = false;
@@ -630,8 +764,8 @@ function panelStatusText(a) {
   if (!a) return "copilot ›";
   if (a.status === "done") return "copilot › анализ оттока · готово";
   if (a.status === "error") return "copilot › анализ оттока · ошибка";
-  if (a.data && a.data.reasons && a.data.reasons.length) return "copilot › анализ оттока · риски получены, генерирую текст…";
-  return "copilot › анализ оттока · вызываю инструменты…";
+  if (a.data && a.data.reasons && a.data.reasons.length) return "copilot › анализ оттока · готовлю рекомендации…";
+  return "copilot › анализ оттока · провожу анализ…";
 }
 
 /* Каркас панели — статичный в index.html, сюда перерисовываются вкладки. */
@@ -681,7 +815,7 @@ function renderPanelRazbor(a) {
       </div>`).join("") || '<div class="cp-empty">Нет данных от prediction-сервиса</div>'}
     <div class="cp-agent">
       <div class="cp-agent-label">${esc(panelStatusText(a))}</div>
-      <div class="cp-agent-text">${a.text ? esc(a.text) : '<span style="color:var(--ink-3)">Запускаю агента…</span>'}</div>
+      <div class="cp-agent-text md">${a.text ? mdToHtml(a.text) : '<span class="cp-dots"><span></span><span></span><span></span></span>'}</div>
     </div>`;
 }
 
@@ -753,6 +887,27 @@ async function continueInChat(a) {
   }
 }
 
+async function deleteThread(threadId) {
+  state.confirmDelete = null;
+  try {
+    await api(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+  } catch (e) {
+    console.warn("Не удалось удалить чат:", e.message);
+  }
+  // Из списка убираем независимо от ответа: сервер мог удалить, а ответ потеряться
+  state.threads = state.threads.filter((t) => t.thread_id !== threadId);
+  if (state.threadId === threadId) {
+    state.threadId = null;
+    state.messages = [];
+    if (location.hash.startsWith("#/c/")) {
+      location.hash = "#/chats"; // route() перерисует вид
+    } else {
+      renderChatView();
+    }
+  }
+  renderSidebar();
+}
+
 /* ---------- обработчики ---------- */
 
 document.addEventListener("click", async (e) => {
@@ -787,7 +942,26 @@ document.addEventListener("click", async (e) => {
     setPanelTab(target.dataset.panelTab);
     return;
   }
+  if (target.dataset.del !== undefined) {
+    // Двухшаговое удаление: первый клик — подтверждение, второй — удаление
+    if (state.sending) return;
+    const id = target.dataset.del;
+    if (state.confirmDelete === id) {
+      deleteThread(id);
+    } else {
+      state.confirmDelete = id;
+      renderSidebar();
+      setTimeout(() => {
+        if (state.confirmDelete === id) {
+          state.confirmDelete = null;
+          if (state.view === "chats") renderSidebar();
+        }
+      }, 3000);
+    }
+    return;
+  }
   if (target.dataset.thread) {
+    state.confirmDelete = null;
     if (state.sending) return;
     location.hash = `#/c/${encodeURIComponent(target.dataset.thread)}`;
     return;

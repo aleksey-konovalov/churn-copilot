@@ -62,7 +62,7 @@ button { font: inherit; }
 .newchat {
   display: flex; align-items: center; gap: 6px; width: 100%;
   background: var(--ink); color: #fff; border: none; border-radius: 8px;
-  padding: 7px 10px; font-size: 13px; cursor: pointer;
+  padding: 7px 10px; font-size: 13px; cursor: pointer; margin-top: 10px;
 }
 .newchat:hover { background: #303030; }
 .newchat svg { width: 14px; height: 14px; }
@@ -81,14 +81,31 @@ body[data-view="clients"] .newchat { display: none; }
 .group { font-size: 11px; color: var(--ink-3); padding: 10px 8px 4px; }
 
 .item {
-  display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%;
-  text-align: left; background: transparent; border: none; border-radius: 8px;
-  padding: 7px 8px; font-size: 13px; color: var(--ink); cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; gap: 4px;
+  border-radius: 8px;
 }
 .item:hover { background: var(--hover); }
 .item.active { background: var(--active); }
+.item-main {
+  flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  text-align: left; background: transparent; border: none; border-radius: 8px;
+  padding: 7px 8px; font-size: 13px; color: var(--ink); cursor: pointer;
+}
 .item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item-time { font-size: 11px; color: var(--ink-3); flex: none; }
+
+/* удаление чата: × появляется при наведении, второй клик подтверждает */
+.item-del {
+  flex: none; border: none; background: transparent; color: var(--ink-3); cursor: pointer;
+  padding: 4px; margin-right: 6px; display: inline-flex; align-items: center;
+  opacity: 0; border-radius: 6px; font-size: 11px;
+}
+.item-del svg { width: 11px; height: 11px; }
+.item:hover .item-del, .item-del:focus-visible { opacity: 1; }
+.item-del:hover { color: var(--ink); background: var(--active); }
+.item.confirm .item-del {
+  opacity: 1; background: var(--ink); color: #fff; padding: 3px 9px;
+}
 
 .side-foot { border-top: 1px solid var(--line-2); padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex: none; }
 
@@ -147,8 +164,8 @@ body[data-view="clients"] .newchat { display: none; }
   padding: 9px 12px; max-width: 520px; white-space: pre-wrap; overflow-wrap: break-word;
 }
 
-.answer { white-space: pre-wrap; overflow-wrap: break-word; }
-.answer.error { color: var(--error); font-size: 13px; }
+.answer { overflow-wrap: break-word; }
+.answer.error { color: var(--error); font-size: 13px; white-space: pre-wrap; }
 
 .toolchip {
   display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
@@ -289,7 +306,30 @@ body[data-view="clients"] .newchat { display: none; }
 
 .cp-agent { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
 .cp-agent-label { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cp-agent-text { font-size: 13px; white-space: pre-wrap; overflow-wrap: break-word; }
+.cp-agent-text { font-size: 13px; }
+.cp-dots { display: inline-flex; gap: 4px; padding: 5px 0; }
+.cp-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); animation: blink 1.2s infinite; }
+
+/* ---------- markdown в ответах агента (чат + панель анализа) ---------- */
+
+.md { font-size: 13px; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 12px 0 6px; font-size: 13.5px; font-weight: 600; }
+.md h1 { font-size: 15px; }
+.md h2 { font-size: 14.5px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
+.md table { border-collapse: collapse; margin: 2px 0 10px; font-size: 12px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--panel); font-weight: 500; white-space: nowrap; }
+.md code { font-family: var(--mono); font-size: 12px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+.md pre { background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; overflow: auto; margin: 0 0 8px; }
+.md pre code { border: none; background: none; padding: 0; }
+.md blockquote { margin: 0 0 8px; padding: 2px 10px; border-left: 2px solid var(--line); color: var(--ink-2); }
+.md a { color: inherit; text-decoration: underline; }
 
 .cp-cta {
   display: flex; align-items: center; justify-content: center; gap: 6px;

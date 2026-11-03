@@ -263,6 +263,27 @@ async def get_thread(thread_id: str):
     return {"thread_id": thread_id, "messages": messages}
 
 
+@router.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str):
+    """Удаление чата: запись о заголовке + история сообщений из checkpointer'а."""
+    if _meta_conn is None:
+        raise HTTPException(503, "Хранилище диалогов ещё инициализируется")
+    cur = await _meta_conn.execute("DELETE FROM thread_meta WHERE thread_id = ?", (thread_id,))
+    await _meta_conn.commit()
+    if cur.rowcount == 0:
+        raise HTTPException(404, f"Чат {thread_id} не найден")
+    # История в checkpointer'е: без неё чат не «воскреснет» при повторном thread_id.
+    # Не чинится — чат уже пропал из списка, ошибка записи не должна ломать ответ.
+    agent = get_root_agent()
+    checkpointer = getattr(agent, "checkpointer", None)
+    if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
+        try:
+            await checkpointer.adelete_thread(thread_id)
+        except Exception:
+            logger.exception(f"Не удалось удалить историю чата {thread_id} из checkpointer'а")
+    return {"deleted": thread_id}
+
+
 @router.post("/threads/seed")
 async def seed_thread(body: SeedRequest):
     """Создаёт чат, в памяти агента которого уже лежит готовый разбор клиента.

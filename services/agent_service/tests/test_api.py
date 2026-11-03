@@ -26,7 +26,8 @@ for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_RO
 os.environ.setdefault("COLLECTION_NAME", "test_collection")
 os.environ.setdefault("ACTIVE_LLM_PROFILE", "local_qwen_agent")
 
-from api import _format_value, _short_title, _stream_agent  # noqa: E402
+from api import _format_value, _short_title, _stream_agent, close_thread_meta, init_thread_meta  # noqa: E402
+import api  # noqa: E402  # модуль — для monkeypatch get_checkpoint_db_path и _touch_thread
 from clients_store import close_clients_store, init_clients_store  # noqa: E402
 from main import app  # noqa: E402
 
@@ -128,6 +129,7 @@ def test_health(client):
 def test_threads_requires_init(client):
     assert client.get("/api/threads").status_code == 503
     assert client.get("/api/threads/abc").status_code == 503
+    assert client.delete("/api/threads/abc").status_code == 503
 
 
 def test_chat_requires_agent(client):
@@ -219,3 +221,25 @@ def test_clients_limit_bounds(client, clients_store):
     resp = client.get("/api/clients?limit=0")
     assert resp.status_code == 200
     assert len(resp.json()["clients"]) == 1  # limit 0 -> приведён к 1
+
+
+# ---------- удаление чатов (thread_meta; агент не нужен) ----------
+
+@pytest.fixture()
+def threads_meta(tmp_path, monkeypatch):
+    """thread_meta на временной БД; агент не инициализирован — adelete_thread пропускается."""
+    monkeypatch.setattr(api, "get_checkpoint_db_path", lambda: str(tmp_path / "checkpoints.db"))
+    asyncio.run(init_thread_meta())
+    yield
+    asyncio.run(close_thread_meta())
+
+
+def test_thread_delete(client, threads_meta):
+    asyncio.run(api._touch_thread("t-del", title="Чат на удаление"))
+    threads = client.get("/api/threads").json()["threads"]
+    assert [t["thread_id"] for t in threads] == ["t-del"]
+
+    assert client.delete("/api/threads/t-del").status_code == 200
+    assert client.get("/api/threads").json()["threads"] == []
+    # повторное удаление — чата больше нет
+    assert client.delete("/api/threads/t-del").status_code == 404
