@@ -300,13 +300,16 @@ function clientFiltersHtml() {
   for (const f of FILTERS.slice(1)) {
     counts[f.key] = state.clients.filter((c) => f.match(c.churn_probability)).length;
   }
+  // Структура как у чатов: .item-обёртка + .item-main (после перестройки списка чатов стили живут на item-main)
   return `
-    <div class="group">Списки</div>
+    <div class="group">Фильтры по рискам</div>
     ${FILTERS.map((f) => `
-      <button type="button" class="item ${state.clientsFilter === f.key ? "active" : ""}" data-filter="${f.key}">
-        <span class="item-title">${f.label}</span>
-        <span class="item-time">${counts[f.key] ?? 0}</span>
-      </button>`).join("")}`;
+      <div class="item ${state.clientsFilter === f.key ? "active" : ""}">
+        <button type="button" class="item-main" data-filter="${f.key}">
+          <span class="item-title">${f.label}</span>
+          <span class="item-time">${counts[f.key] ?? 0}</span>
+        </button>
+      </div>`).join("")}`;
 }
 
 /* ---------- маршрутизация ---------- */
