@@ -16,7 +16,6 @@ REST/SSE API для веб-фронтенда (frontend_service).
 Выгрузка клиентов живёт в SQLite (clients_store): CSV перегоняется туда при
 старте сервиса, /api/clients и /api/clients/{id} читают из БД.
 """
-import asyncio
 import json
 import os
 import uuid
@@ -407,20 +406,85 @@ async def analyze(body: AnalyzeRequest):
 
 # =========  Список клиентов (SQLite-выгрузка + риски)  =========
 
-async def _fetch_risks(client_ids: list[int]) -> dict[int, float | None]:
-    """Риски пачкой параллельно: локальный predict-сервис отвечает миллисекундами."""
+# Пороги бакетов риска — синхронизированы с FILTERS/riskClass в frontend_service/web/app.js
+RISK_BUCKETS: dict[str, tuple[float | None, float | None]] = {
+    "high": (0.6, None),   # p >= 0.6
+    "mid": (0.4, 0.6),     # 0.4 <= p < 0.6
+    "low": (None, 0.4),    # p < 0.4
+}
+
+# Карта рисков всех клиентов {client_id: probability}: строится одним batch-вызовом
+# churn_pred_service и живёт, пока не сменится выгрузка (fingerprint CSV в meta БД).
+# Фильтры по рискам и счётчики в сайдбаре считаются по ней глобально, а не по видимой
+# странице. Модель у churn_pred грузится при старте контейнера, так что карте не
+# нужно устаревать чаще, чем рестарту предикта.
+_risks_cache: dict = {"fingerprint": None, "risks": {}}
+
+_FETCH_ALL_LIMIT = 20_000  # выгрузка ~10k строк: проход целиком с запасом
+
+
+async def _risk_map() -> dict[int, float]:
+    """Карта рисков всех клиентов выгрузки; {} если predict-сервис недоступен."""
+    try:
+        fingerprint = await store.stored_fingerprint()
+    except store.StoreNotReady:
+        return {}
+    if fingerprint is None or _risks_cache["fingerprint"] != fingerprint:
+        client_ids: list[int] = []
+        offset = 0
+        while True:
+            batch = await store.fetch_clients(limit=_FETCH_ALL_LIMIT, offset=offset)
+            client_ids.extend(row["client_id"] for row in batch)
+            if len(batch) < _FETCH_ALL_LIMIT:
+                break
+            offset += _FETCH_ALL_LIMIT
+        risks = await _fetch_probabilities_batch(client_ids)
+        _risks_cache["fingerprint"] = fingerprint
+        _risks_cache["risks"] = risks
+        logger.info(f"Карта рисков обновлена: {len(risks)} из {len(client_ids)} клиентов")
+    return _risks_cache["risks"]
+
+
+async def _fetch_probabilities_batch(client_ids: list[int]) -> dict[int, float]:
+    """Вероятности одним POST /predict_batch churn_pred_service; {} при недоступности."""
+    if not client_ids:
+        return {}
     base_url = os.getenv("CHURN_PRED_SERVICE_URL", "http://localhost:3010")
-    semaphore = asyncio.Semaphore(8)
-    risks: dict[int, float | None] = {}
+    try:
+        async with create_async_client(timeout=60.0) as http:
+            response = await http.post(f"{base_url}/predict_batch", json={"client_ids": client_ids})
+        response.raise_for_status()
+        return {item["client_id"]: item["churn_probability"] for item in response.json()}
+    except Exception:
+        logger.warning("predict_batch недоступен — фильтры по рискам и счётчики будут пустыми")
+        return {}
 
-    async def fetch(client_id: int) -> None:
-        async with semaphore:
-            prediction = await _fetch_prediction(client_id)
-            risks[client_id] = prediction.get("churn_probability") if prediction else None
 
-    # _fetch_prediction открывает свой клиент на вызов; локальный predict отвечает быстро
-    await asyncio.gather(*(fetch(cid) for cid in client_ids))
-    return risks
+def _bucket_of(probability) -> str | None:
+    """Бакет риска по порогам RISK_BUCKETS; None — прогноза нет."""
+    if not isinstance(probability, (int, float)):
+        return None
+    for key, (low, high) in RISK_BUCKETS.items():
+        if (low is None or probability >= low) and (high is None or probability < high):
+            return key
+    return None
+
+
+def _risk_counts(risks: dict, total: int) -> dict[str, int]:
+    """Глобальные счётчики по бакетам для сайдбара фронтенда.
+
+    risks — {client_id: probability | None} по всей выборке (с учётом поиска);
+    unknown = клиенты без числового прогноза (predict-сервис недоступен).
+    """
+    counts = {"all": total, "high": 0, "mid": 0, "low": 0}
+    unknown = total
+    for probability in risks.values():
+        bucket = _bucket_of(probability)
+        if bucket is not None:
+            counts[bucket] += 1
+            unknown -= 1
+    counts["unknown"] = max(0, unknown)
+    return counts
 
 
 def _display_client(row: dict) -> dict:
@@ -430,24 +494,47 @@ def _display_client(row: dict) -> dict:
 
 
 @router.get("/clients")
-async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None):
-    """Страница выгрузки клиентов с вероятностями оттока (None, если predict-сервис недоступен).
+async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None, risk: str = "all"):
+    """Страница выгрузки клиентов с вероятностями оттока.
 
-    q — поиск по фамилии или ID (в БД clients_store).
+    q — поиск по фамилии или ID (в БД clients_store); risk — серверный фильтр
+    по бакету риска (all/high/mid/low, пороги RISK_BUCKETS). risk_counts —
+    глобальные счётчики по всей выборке (с учётом поиска), не по странице.
     """
+    if risk not in ("all", *RISK_BUCKETS):
+        raise HTTPException(400, f"risk должен быть одним из: all, {', '.join(RISK_BUCKETS)}")
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     try:
-        rows = await store.fetch_clients(limit=limit, offset=offset, search=q)
-        total = await store.count_clients(search=q)
+        # Полный проход нужен, когда фильтр/поиск применяются в памяти процесса:
+        # риски живут в кэше агента, SQL про них не знает
+        if risk != "all" or q:
+            matched = await store.fetch_clients(limit=_FETCH_ALL_LIMIT, offset=0, search=q)
+            risks_full = await _risk_map()
+            # Счётчики — глобальные (по всей выборке с учётом поиска), до фильтра
+            counts = _risk_counts(
+                {row["client_id"]: risks_full.get(row["client_id"]) for row in matched},
+                len(matched),
+            )
+            if risk != "all":
+                matched = [
+                    row for row in matched
+                    if _bucket_of(risks_full.get(row["client_id"])) == risk
+                ]
+            total = len(matched)
+            page_rows = matched[offset:offset + limit]
+        else:
+            page_rows = await store.fetch_clients(limit=limit, offset=offset, search=q)
+            total = await store.count_clients(search=q)
+            risks_full = await _risk_map()
+            counts = _risk_counts(risks_full, await store.count_clients())
     except store.StoreNotReady:
         raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
-    risks = await _fetch_risks([row["client_id"] for row in rows])
     clients = [
-        {**_display_client(row), "churn_probability": risks.get(row["client_id"])}
-        for row in rows
+        {**_display_client(row), "churn_probability": risks_full.get(row["client_id"])}
+        for row in page_rows
     ]
-    return {"total": total, "clients": clients}
+    return {"total": total, "clients": clients, "risk_counts": counts}
 
 
 @router.get("/clients/{client_id}")
