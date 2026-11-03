@@ -34,8 +34,9 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # DEVICE=cpu: FRIDA лёгкая и в GPU не нуждается, резерв оставляем vLLM;
+      # для тяжёлого Giga-варианта заменить на cuda (GPU-резервации уже прописаны)
       - DEVICE=cpu
-      - EMBEDDING_SERVICE_URL=http://embedding_service:3020
       - EMBEDDER_TYPE=frida
       - MODEL_PATH=ai-forever/FRIDA
       - TOKENIZER_MAX_LENGTH=512
@@ -59,7 +60,7 @@ services:
     env_file:
       - ./services/vllm/.env  # Для варьирования параметров без ребилда
     ports:
-      - "3040:8901"  # единственный внутренний сервис с портом на хосте: dev-режим агента (make run-agent) и отладка LLM
+      - "3040:8901"  # единственный внутренний сервис с портом на хосте: отладка LLM с хоста (http://localhost:3040/v1)
     volumes:
       - vllm-models:/root/.cache/huggingface # Чтобы не качать модель заново каждый раз
     deploy:
@@ -176,3 +177,9 @@ volumes:
   app-cache:
   vllm-models:
   agent-data:
+
+networks:
+  default:
+    # Имя сети фиксируем: от него зависит docker run --network в Makefile и README.
+    # Композный дефолт <каталог>_default ломается при переименовании клона
+    name: churn_copilot_default

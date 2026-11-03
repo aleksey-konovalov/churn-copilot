@@ -25,7 +25,7 @@
 │ Менеджер  →  Web UI (:3050)  →  agent_service API  →  root_agent                │
 │  (frontend_service:             (REST/SSE, LangGraph, checkpointer)             │
 │   статика + прокси /api)                │                                       │
-│                     get_churn_analisys_and_retention (sub-agent)                │
+│                     get_churn_analysis_and_retention (sub-agent)                │
 │                                         │                                       │
 │                                 get_churn_info (tool)                           │
 │                    ┌────────────────────┼────────────────────┐                  │
@@ -67,6 +67,7 @@ churn_copilot/
 │   │   └── processed/          # train.csv / val.csv (stratified split)
 │   ├── notebooks/
 │   │   ├── 00_data_split.ipynb
+│   │   ├── 01_eda.ipynb
 │   │   └── 02_model_pipeline.ipynb
 │   └── src/
 │       └── feature_engineering.py   # Единый pipeline train ↔ serve
@@ -88,7 +89,7 @@ churn_copilot/
 ### Требования
 
 - Docker + docker-compose, **NVIDIA Container Toolkit** (GPU для vLLM и embeddings)
-- Python 3.10 (для `agent_service`)
+- Python 3.10+ (для тестов и разработки; рантайм сервисов — Docker, локальный запуск вне compose не поддерживается)
 - Датасет Kaggle в `data_science/data/raw/`
 - Обученная модель `data_science/artifacts/best_model.cbm`
 - Политики удержания в `data/rag/*.txt` (для RAG)
@@ -96,6 +97,13 @@ churn_copilot/
 ### Подготовка ассетов (модель, датасеты, Qdrant)
 
 Чтобы не коммитить ассеты (веса моделей, датасеты, снапшоты Qdrant), проект содержит Makefile для автоматизации их скачивания из Google Drive.
+
+**0. Конфигурация скачивания:**
+```bash
+cp shared/.env.example shared/.env
+```
+Заполните `GOOGLE_DRIVE_*` file ID (файл gitignored). Те же переменные нужны целям
+`restore-qdrant` / `save-snapshot` (имя коллекции — `QDRANT_COLLECTION`).
 
 **1. Скачивание файлов:**
 ```bash
@@ -115,7 +123,7 @@ make restore-qdrant
 ```bash
 make save-snapshot
 ```
-Команда запросит создание снапшота у работающего сервиса Qdrant, достанет файл из контейнера и сохранит его локально в `infra/qdrant/snapshots/{COLLECTION_NAME}/snapshot.snapshot`. После этого файл можно загрузить на Google Drive и обновить `GOOGLE_DRIVE_QDRANT_SNAPSHOT_ID` в `.env`.
+Команда запросит создание снапшота у работающего сервиса Qdrant, достанет файл из контейнера и сохранит его локально в `infra/qdrant/snapshots/{COLLECTION_NAME}/snapshot.snapshot`. После этого файл можно загрузить на Google Drive и обновить `GOOGLE_DRIVE_QDRANT_SNAPSHOT_ID` в `shared/.env`.
 
 ### 1. Инфраструктура:
 
@@ -147,6 +155,9 @@ vLLM — самый тяжёлый контейнер (GPU, 27B AWQ). Когда
 ```bash
 docker compose up -d vllm   # агент найдёт его по имени: http://vllm:8901/v1 (LLM_BASE_URL в compose)
 ```
+
+Если vLLM развёрнут на хосте, а не в compose — задайте `LLM_BASE_URL` / `LLM_MODEL` в `.env`
+корня репозитория (см. `.env.example`), compose подставит их в agent_service.
 
 **Про порты:** наружу публикуются только `3050` (UI) и `3040` (vLLM — для локальных клиентов LLM и отладки). 
 Остальные сервисы доступны только по внутренней сети compose: меньше путаницы и конфликтов портов 
@@ -231,7 +242,7 @@ LLM не видит датасет напрямую. Доступ только �
 
 ### 4. Условный RAG
 
-Поиск политик включается только при `churn_probability ≥ CHURN_PROB_TRASHOLD` (default 0.5). RAG-запрос **динамически строится из SHAP top reasons** через `FEATURE_MAP` — retrieval привязан к конкретному профилю риска клиента.
+Поиск политик включается только при `churn_probability ≥ CHURN_PROB_THRESHOLD` (default 0.5). RAG-запрос **динамически строится из SHAP top reasons** через `FEATURE_MAP` — retrieval привязан к конкретному профилю риска клиента.
 
 ### 5. Продвинутый vector search
 

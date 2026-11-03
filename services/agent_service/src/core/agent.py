@@ -24,7 +24,7 @@ from shared.utils.text import sanitize_llm_text
 
 from .llm_client import get_llm_client, get_optional_llm_client, llm
 from .prompts import (
-    churn_analisys_and_retention_agent_prompt,
+    churn_analysis_and_retention_agent_prompt,
     churn_dialogue_summary_prompt,
     root_agent_prompt,
 )
@@ -48,10 +48,10 @@ def _fallback_middleware() -> list:
 
 # =========  Суб-агент для получения экспертизы по корпоративным политикам и маркетинговым предложениям по удержанию.  =========
 
-churn_analisys_and_retention_agent = create_agent(
+churn_analysis_and_retention_agent = create_agent(
     llm,
     tools=[get_churn_info],
-    system_prompt=churn_analisys_and_retention_agent_prompt,
+    system_prompt=churn_analysis_and_retention_agent_prompt,
     middleware=_fallback_middleware() + [
         # Сетевые сбои тулов (prediction-сервис, embedding, Qdrant) и 5xx: 2 ретрая,
         # затем ошибка уходит модели текстом
@@ -66,15 +66,15 @@ churn_analisys_and_retention_agent = create_agent(
     ],
 )
 
-# Тул, в рамках которого будет работать суб-агент churn_analisys_and_retention_agent
+# Тул, в рамках которого будет работать суб-агент churn_analysis_and_retention_agent
 @tool(
-    "get_churn_analisys_and_retention",
+    "get_churn_analysis_and_retention",
     description="Используй для получения экспертизы по корпоративным политикам и маркетинговым предложениям по удержанию. \
         Не используй для обычного диалога или приветствий."
 )
-async def get_churn_analisys_and_retention(query: str):
-    logger.info("Задача передана агенту churn_analisys_and_retention_agent")
-    result = await churn_analisys_and_retention_agent.ainvoke(
+async def get_churn_analysis_and_retention(query: str):
+    logger.info("Задача передана агенту churn_analysis_and_retention_agent")
+    result = await churn_analysis_and_retention_agent.ainvoke(
         {"messages": [{"role": "user", "content": query}]}
     )
     # Суб-агент эфемерный (без checkpointer): его внутренняя история не сохраняется,
@@ -103,7 +103,7 @@ def _root_middleware() -> list:
 
     middleware.append(
         ToolCallLimitMiddleware(
-            tool_name="get_churn_analisys_and_retention", run_limit=5, exit_behavior="end"
+            tool_name="get_churn_analysis_and_retention", run_limit=5, exit_behavior="end"
         )
     )
     return middleware
@@ -113,7 +113,7 @@ def build_root_agent(checkpointer, model=None):
     """Корневой агент с persistent-памятью. model — точка расширения для тестов."""
     return create_agent(
         model or llm,
-        tools=[get_churn_analisys_and_retention],
+        tools=[get_churn_analysis_and_retention],
         system_prompt=root_agent_prompt,
         middleware=_root_middleware(),
         checkpointer=checkpointer,
