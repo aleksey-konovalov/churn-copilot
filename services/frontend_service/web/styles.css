@@ -113,6 +113,14 @@ body[data-view="clients"] .newchat { display: none; }
 .crumb { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .head-meta { font-size: 11.5px; color: var(--ink-3); flex: none; }
 
+.head-search {
+  flex: none; width: 210px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  padding: 5px 10px; font-size: 12.5px; color: var(--ink);
+}
+.head-search:focus { outline: none; border-color: #c9c9c7; }
+.head-search::placeholder { color: var(--ink-3); }
+
 /* ---------- чат ---------- */
 
 .stream {

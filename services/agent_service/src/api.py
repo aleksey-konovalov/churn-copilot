@@ -12,14 +12,15 @@ REST/SSE API для веб-фронтенда (frontend_service).
   {"type": "token", "text": str}
   {"type": "data",  "client_id", "churn_probability", "reasons": [...]}   — только /analyze
   {"type": "done"}  /  {"type": "error", "message": str}
+
+Выгрузка клиентов живёт в SQLite (clients_store): CSV перегоняется туда при
+старте сервиса, /api/clients и /api/clients/{id} читают из БД.
 """
 import asyncio
-import csv
 import json
 import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 import aiosqlite
 import httpx
@@ -32,6 +33,7 @@ from shared.constants import BINARY_FEATURES, FEATURE_MAP
 from shared.utils.logger import get_logger
 from shared.utils.text import sanitize_llm_text
 
+import clients_store as store
 from core.agent import get_checkpoint_db_path, get_root_agent
 from core.callbacks import TokenUsageCallback
 
@@ -168,15 +170,24 @@ async def _stream_agent(agent, message_text: str, thread_id: str, text_sink: lis
         ):
             if mode == "messages":
                 chunk = payload[0]
-                if not isinstance(chunk, AIMessageChunk):
+                # create_agent в зависимости от middleware-стека отдаёт либо AIMessageChunk
+                # (потоковый режим), либо готовый AIMessage одним событием — обрабатываем оба
+                if not isinstance(chunk, AIMessage):
                     continue
                 # Старт тулов: модель начала генерировать tool call
-                for tc in chunk.tool_call_chunks or []:
+                for tc in getattr(chunk, "tool_call_chunks", None) or []:
                     name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
                     tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                     if tc_id and name and tc_id not in started_tools:
                         started_tools[tc_id] = name
                         yield _sse({"type": "tool", "phase": "start", "name": name})
+                if not isinstance(chunk, AIMessageChunk):
+                    # Готовое сообщение: tool_calls уже собраны
+                    for tc in chunk.tool_calls or []:
+                        tc_id, name = tc.get("id"), tc.get("name")
+                        if tc_id and name and tc_id not in started_tools:
+                            started_tools[tc_id] = name
+                            yield _sse({"type": "tool", "phase": "start", "name": name})
                 text = _content_text(chunk.content)
                 if text:
                     if text_sink is not None:
@@ -370,57 +381,7 @@ async def analyze(body: AnalyzeRequest):
     return _sse_response(_run_analysis(agent, body.client_id))
 
 
-# =========  Список клиентов (выгрузка + риски)  =========
-
-# Кэш выгрузки: перечитываем CSV только при изменении файла
-_clients_cache: dict = {"path": None, "mtime": None, "rows": []}
-
-
-def _clients_csv_path() -> str:
-    return os.getenv("CLIENTS_CSV_PATH") or str(
-        Path(__file__).resolve().parents[3] / "data_science" / "data" / "raw" / "test.csv"
-    )
-
-
-def _to_int(value) -> int | None:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_float(value) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _load_clients() -> list[dict]:
-    path = _clients_csv_path()
-    mtime = os.path.getmtime(path)
-    if _clients_cache["path"] != path or _clients_cache["mtime"] != mtime:
-        rows = []
-        with open(path, newline="", encoding="utf-8") as file:
-            for index, raw in enumerate(csv.DictReader(file)):
-                rows.append({
-                    "client_id": index,
-                    "surname": raw.get("Surname", ""),
-                    "geography": raw.get("Geography", ""),
-                    "gender": raw.get("Gender", ""),
-                    "age": _to_int(raw.get("Age")),
-                    "tenure": _to_int(raw.get("Tenure")),
-                    "balance": _to_float(raw.get("Balance")),
-                    "num_of_products": _to_int(raw.get("NumOfProducts")),
-                    "has_cr_card": _to_int(raw.get("HasCrCard")),
-                    "is_active_member": _to_int(raw.get("IsActiveMember")),
-                    "credit_score": _to_int(raw.get("CreditScore")),
-                    "estimated_salary": _to_float(raw.get("EstimatedSalary")),
-                })
-        _clients_cache.update(path=path, mtime=mtime, rows=rows)
-        logger.info(f"Выгрузка клиентов загружена: {len(rows)} строк ({path})")
-    return _clients_cache["rows"]
-
+# =========  Список клиентов (SQLite-выгрузка + риски)  =========
 
 async def _fetch_risks(client_ids: list[int]) -> dict[int, float | None]:
     """Риски пачкой параллельно: локальный predict-сервис отвечает миллисекундами."""
@@ -439,18 +400,35 @@ async def _fetch_risks(client_ids: list[int]) -> dict[int, float | None]:
 
 
 @router.get("/clients")
-async def list_clients(limit: int = 50, offset: int = 0):
-    """Страница выгрузки клиентов с вероятностями оттока (None, если predict-сервис недоступен)."""
+async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None):
+    """Страница выгрузки клиентов с вероятностями оттока (None, если predict-сервис недоступен).
+
+    q — поиск по фамилии (LIKE, в БД clients_store).
+    """
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     try:
-        rows = _load_clients()
-    except OSError as exc:
-        raise HTTPException(503, f"Выгрузка клиентов недоступна: {exc}")
-    page = rows[offset:offset + limit]
-    risks = await _fetch_risks([row["client_id"] for row in page])
-    clients = [{**row, "churn_probability": risks.get(row["client_id"])} for row in page]
-    return {"total": len(rows), "clients": clients}
+        rows = await store.fetch_clients(limit=limit, offset=offset, search=q)
+        total = await store.count_clients(search=q)
+    except store.StoreNotReady:
+        raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
+    risks = await _fetch_risks([row["client_id"] for row in rows])
+    clients = [{**row, "churn_probability": risks.get(row["client_id"])} for row in rows]
+    return {"total": total, "clients": clients}
+
+
+@router.get("/clients/{client_id}")
+async def get_client(client_id: int):
+    """Один клиент по id (карточка, deep-link после seed) + свежий риск из predict-сервиса."""
+    try:
+        row = await store.fetch_client(client_id)
+    except store.StoreNotReady:
+        raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
+    if row is None:
+        raise HTTPException(404, f"Клиент {client_id} не найден в выгрузке")
+    prediction = await _fetch_prediction(client_id)
+    row["churn_probability"] = prediction.get("churn_probability") if prediction else None
+    return row
 
 
 @router.get("/health")

@@ -47,6 +47,7 @@ const state = {
   clientsTotal: 0,
   clientsLoaded: false,
   clientsLoading: false,
+  clientsQuery: "",         // поиск по фамилии (серверный, q в /api/clients)
   clientsFilter: "all",     // all | high | mid | low
   activeRow: null,
   analyses: new Map(),      // client_id (string) -> analysis
@@ -428,7 +429,8 @@ async function loadClients() {
   state.clientsLoading = true;
   renderClientsMeta();
   try {
-    const resp = await api("/api/clients?limit=50");
+    const q = state.clientsQuery ? `&q=${encodeURIComponent(state.clientsQuery)}` : "";
+    const resp = await api(`/api/clients?limit=50${q}`);
     const data = await resp.json();
     state.clients = data.clients || [];
     state.clientsTotal = data.total || 0;
@@ -445,13 +447,26 @@ async function loadClients() {
   }
 }
 
+/** Клиент по id напрямую из API: deep-link вне загруженной страницы, свежий риск для карточки. */
+async function fetchClient(clientId) {
+  try {
+    const resp = await api(`/api/clients/${clientId}`);
+    return await resp.json();
+  } catch (e) {
+    console.warn(`Клиент ${clientId} недоступен:`, e.message);
+    return null;
+  }
+}
+
 function renderClientsMeta() {
   const meta = $("#cl-meta");
   if (meta) {
     meta.textContent = state.clientsLoading
       ? "загрузка…"
       : state.clientsLoaded
-        ? `${state.clients.length} из ${state.clientsTotal} · риски из churn_pred_service`
+        ? state.clientsQuery
+          ? `найдено: ${state.clients.length} из ${state.clientsTotal}`
+          : `${state.clients.length} из ${state.clientsTotal} · риски из churn_pred_service`
         : "";
   }
 }
@@ -460,6 +475,8 @@ function renderClientsView() {
   $("#main").innerHTML = `
     <header class="main-head">
       <div class="crumb">Клиенты · выгрузка</div>
+      <input class="head-search" id="cl-search" type="search" autocomplete="off"
+             placeholder="Поиск по фамилии…" value="${esc(state.clientsQuery)}">
       <div class="head-meta" id="cl-meta"></div>
     </header>
     <div class="table-area">
@@ -476,6 +493,18 @@ function renderClientsView() {
       <div class="drawer-body" id="drawer-body"></div>
       <div class="drawer-status" id="drawer-status">copilot ›</div>
     </div>`;
+
+  // Серверный поиск по фамилии: дебаунс, чтобы не дёргать API на каждый символ
+  const search = $("#cl-search");
+  let debounce;
+  search.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      state.clientsQuery = search.value.trim();
+      loadClients();
+    }, 300);
+  });
+
   renderClientsMeta();
   renderClientsTable();
   if (!state.clientsLoaded && !state.clientsLoading) loadClients();
@@ -500,7 +529,12 @@ function renderClientsTable() {
   if (!body) return;
   const rows = visibleClients();
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-3)">${state.clientsLoading ? "Загрузка…" : "Нет клиентов в этом списке"}</td></tr>`;
+    const empty = state.clientsLoading
+      ? "Загрузка…"
+      : state.clientsQuery
+        ? "Ничего не найдено по этой фамилии"
+        : "Нет клиентов в этом списке";
+    body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-3)">${empty}</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((c) => `
@@ -694,7 +728,7 @@ function renderCard(a) {
 
 /* ---------- обработчики ---------- */
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   // Кнопка-крестик на вкладке панели — раньше переключения вкладок
   const closeBtn = e.target.closest("[data-close]");
   if (closeBtn) {
@@ -733,8 +767,9 @@ document.addEventListener("click", (e) => {
   }
   if (target.dataset.analyze !== undefined) {
     const clientId = Number(target.dataset.analyze);
-    const row = state.clients.find((c) => c.client_id === clientId);
-    openAnalysis(clientId, row);
+    // Рядом с таблицей строка обычно есть; если нет (deep-link) — подтягиваем по id
+    const row = state.clients.find((c) => c.client_id === clientId) || await fetchClient(clientId);
+    openAnalysis(clientId, row || undefined);
     return;
   }
   const tab = target.closest("[data-tab]");
@@ -750,7 +785,16 @@ document.addEventListener("click", (e) => {
   }
   if (target.dataset.act === "card") {
     const a = state.analyses.get(state.drawerActive);
-    if (a) renderCard(a);
+    if (!a) return;
+    // Карточка показывает свежие данные клиента, а не снапшот на момент разбора
+    const fresh = await fetchClient(Number(a.clientId));
+    if (fresh) {
+      a.client = fresh;
+      a.surname = fresh.surname;
+      const index = state.clients.findIndex((c) => c.client_id === fresh.client_id);
+      if (index >= 0) state.clients[index] = fresh;
+    }
+    renderCard(a);
   }
   /* «Продолжить в чате» слушается точечно в renderDrawer/renderCard */
 });
