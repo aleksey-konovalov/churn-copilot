@@ -20,4 +20,5 @@ WORKDIR /app/src
 
 EXPOSE 3050
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "3050"]
+# FRONTEND_PORT читается в рантайме (env из compose), дефолт совпадает с EXPOSE
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port \"${FRONTEND_PORT:-3050}\""]

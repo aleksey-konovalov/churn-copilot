@@ -10,7 +10,7 @@ from .rag import search_qdrant
 logger = get_logger("agent_service.core.tools")
 
 # Конфигурация
-CHURN_PROB_TRASHOLD = float(os.getenv('CHURN_PROB_TRASHOLD', 0.5))
+CHURN_PROB_THRESHOLD = float(os.getenv('CHURN_PROB_THRESHOLD', 0.5))
 
 
 @tool(
@@ -58,7 +58,7 @@ async def get_churn_info(client_id: str):
         # Если риск оттока высок, тянем политики удержания автоматически
         churn_prob = churn_pred_data.get("churn_probability", 0.0)
 
-        if churn_prob >= CHURN_PROB_TRASHOLD:
+        if churn_prob >= CHURN_PROB_THRESHOLD:
             logger.info(f"Высокий риск оттока ({churn_prob}). Формируем RAG запрос...")
             # Вариант запроса на каждую причину оттока: включает голосование в search_qdrant
             rag_queries = build_complex_query_from_reasons(churn_pred_data)
