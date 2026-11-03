@@ -2,6 +2,15 @@ import json
 from shared.constants import FEATURE_MAP, BINARY_FEATURES
 
 
+def _feature_label(feature) -> str:
+    """Человекопонятное название фичи; для неизвестной/отсутствующей — без подчёркиваний.
+
+    FEATURE_MAP.get(feature, ...) с выражением в default вычислялось бы всегда:
+    при feature=None упало бы на .replace до обращения к словарю.
+    """
+    return FEATURE_MAP.get(feature, (feature or "").replace("_", " "))
+
+
 def format_feature_value(feature_name, value):
     """Форматирует значение в зависимости от типа фичи"""
     if feature_name in BINARY_FEATURES:
@@ -38,7 +47,7 @@ def generate_report(json_data):
         risk_pct = reason.get("risk_contribution_pct", 0.0)
 
         # Получаем человекопонятное описание или используем оригинальное название, если его нет в словаре
-        description = FEATURE_MAP.get(feature, feature.replace("_", " "))
+        description = _feature_label(feature)
         
         # Форматируем значение
         formatted_value = format_feature_value(feature, feature_value)
@@ -61,7 +70,7 @@ def build_complex_query_from_reasons(json_data) -> list[str]:
         feature = reason.get("feature")
         feature_value = reason.get("feature_value")
 
-        description = FEATURE_MAP.get(feature, feature.replace("_", " "))
+        description = _feature_label(feature)
         formatted_value = format_feature_value(feature, feature_value)
 
         query_parts.append(f"{description}: {formatted_value}")

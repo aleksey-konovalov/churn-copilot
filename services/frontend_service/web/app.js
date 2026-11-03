@@ -461,7 +461,7 @@ function renderMessages() {
   for (const m of state.messages) {
     addMessageNode(m.role, m.content);
   }
-  scrollStream(true);
+  scrollStream();
 }
 
 function addMessageNode(role, text) {
@@ -482,11 +482,10 @@ function addMessageNode(role, text) {
   return node;
 }
 
-function scrollStream(force = false) {
+function scrollStream() {
   const stream = $("#stream");
   if (!stream) return;
   stream.scrollTop = stream.scrollHeight;
-  void force;
 }
 
 async function sendMessage() {
@@ -826,8 +825,8 @@ function renderPanelRazbor(a) {
     <div class="cp-sub">Факторы риска (SHAP)</div>
     ${(a.data && a.data.reasons || []).map((r) => `
       <div class="cp-factor">
-        <div class="cp-f-top"><span>${esc(r.label)}${r.value ? ` · ${esc(r.value)}` : ""}</span><b class="tabnum">${r.pct}%</b></div>
-        <div class="cp-f-track"><div class="cp-f-fill" style="width:${Math.min(100, r.pct)}%"></div></div>
+        <div class="cp-f-top"><span>${esc(r.label)}${r.value ? ` · ${esc(r.value)}` : ""}</span><b class="tabnum">${esc(String(r.pct))}%</b></div>
+        <div class="cp-f-track"><div class="cp-f-fill" style="width:${esc(String(Math.min(100, r.pct)))}%"></div></div>
       </div>`).join("") || '<div class="cp-empty">Нет данных от prediction-сервиса</div>'}
     <div class="cp-agent">
       <div class="cp-agent-label">${esc(panelStatusText(a))}</div>
