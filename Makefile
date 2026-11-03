@@ -90,16 +90,6 @@ save-snapshot:
 	fi; \
 	echo "Snapshot saved successfully to $$SNAPSHOT_DIR/snapshot.snapshot"
 
-# --- Запуск фронтенд-стека локально (agent API + веб-интерфейс) ---
-
-.PHONY: run-agent
-run-agent:
-	cd services/agent_service && python src/main.py
-
-.PHONY: run-frontend
-run-frontend:
-	cd services/frontend_service && python src/server.py
-
 # --- Полный стек в Docker, кроме vLLM (тяжёлый GPU-контейнер поднимается отдельно) ---
 
 .PHONY: up
