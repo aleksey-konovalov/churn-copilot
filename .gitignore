@@ -3,6 +3,9 @@ data/rag/*
 !data/rag/.gitkeep
 app-cache/
 
+# ZCode: локальные сессии ассистента
+.zcode/
+
 # files
 *.csv
 *.cbm
