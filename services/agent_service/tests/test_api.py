@@ -26,7 +26,7 @@ for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_RO
 os.environ.setdefault("COLLECTION_NAME", "test_collection")
 os.environ.setdefault("ACTIVE_LLM_PROFILE", "local_qwen_agent")
 
-from api import _short_title, _stream_agent  # noqa: E402
+from api import _format_value, _short_title, _stream_agent  # noqa: E402
 from clients_store import close_clients_store, init_clients_store  # noqa: E402
 from main import app  # noqa: E402
 
@@ -45,6 +45,18 @@ def test_short_title_multiline_and_empty():
     assert _short_title("первая строка\nвторая") == "первая строка вторая"
     assert _short_title("") == "Диалог"
     assert _short_title("   ") == "Диалог"
+
+
+def test_format_value_russian_display():
+    """Бинарные флаги — Да/Нет, категориальные — русские значения, остальное — как есть."""
+    assert _format_value("Gender", "Female") == "Женский"
+    assert _format_value("Gender", "Male") == "Мужской"
+    assert _format_value("Geography", "France") == "Франция"
+    assert _format_value("Geography", "Germany") == "Германия"
+    assert _format_value("IsActiveMember", 1) == "Да"
+    assert _format_value("is_zero_balance", 0) == "Нет"
+    assert _format_value("Age", 45) == "45"
+    assert _format_value("Geography", "Italy") == "Italy"  # вне карты — без перевода
 
 
 # ---------- SSE-стрим агента ----------
@@ -167,7 +179,7 @@ def test_clients_list_from_db(client, clients_store):
     assert row["client_id"] == 1
     assert row["csv_id"] == 15001
     assert row["surname"] == "Petrova"
-    assert row["geography"] == "Spain"
+    assert row["geography"] == "Испания"  # категориальные значения отдаются в русском отображении
     assert row["age"] == 41
     assert row["balance"] == pytest.approx(75000.5)
     # риск зависит от окружения: None (predict недоступен) или число (локальный make up)
@@ -180,6 +192,18 @@ def test_clients_search_q(client, clients_store):
     data = resp.json()
     assert data["total"] == 1
     assert data["clients"][0]["surname"] == "Petrova"
+
+
+def test_clients_search_by_ids(client, clients_store):
+    """Цифровой запрос ищет и по фамилии, и по client_id / csv_id / CustomerId (точные совпадения)."""
+    def surnames(query):
+        data = client.get("/api/clients", params={"q": query}).json()
+        return [c["surname"] for c in data["clients"]]
+
+    assert surnames("1") == ["Petrova"]            # client_id
+    assert surnames("15000") == ["Ivanov"]         # csv_id
+    assert surnames("15782454") == ["Ivanov"]      # CustomerId
+    assert surnames("150") == []                   # частичный ID не матчится (префикс отключён)
 
 
 def test_clients_get_by_id(client, clients_store):

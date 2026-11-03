@@ -193,6 +193,21 @@ def _require_conn() -> aiosqlite.Connection:
     return _clients_conn
 
 
+def _search_clause(search: str) -> tuple[str, list]:
+    """WHERE-условие поиска: фамилия (подстрока) + ID, если запрос цифровой.
+
+    Цифровой запрос ищет точное совпадение по client_id и csv_id и точное —
+    по CustomerId (префикс по 8-значному id дал бы тысячи ложных срабатываний).
+    """
+    like = f"%{search}%"
+    if search.isdigit() and len(search) <= 10:
+        return (
+            "(surname LIKE ? OR client_id = ? OR csv_id = ? OR customer_id = ?)",
+            [like, int(search), int(search), search],
+        )
+    return ("surname LIKE ?", [like])
+
+
 def _row_to_dict(row: tuple) -> dict:
     return dict(zip(_COLUMNS, row))
 
@@ -202,20 +217,20 @@ async def count_clients(search: str | None = None) -> int:
     sql = "SELECT COUNT(*) FROM clients"
     params: list = []
     if search:
-        sql += " WHERE surname LIKE ?"
-        params.append(f"%{search}%")
+        clause, params = _search_clause(search)
+        sql += f" WHERE {clause}"
     cur = await conn.execute(sql, params)
     return (await cur.fetchone())[0]
 
 
 async def fetch_clients(limit: int, offset: int, search: str | None = None) -> list[dict]:
-    """Страница клиентов, отсортированная по client_id (опционально поиск по фамилии)."""
+    """Страница клиентов, отсортированная по client_id (опционально поиск по фамилии/ID)."""
     conn = _require_conn()
     sql = f"SELECT {', '.join(_COLUMNS)} FROM clients"
     params: list = []
     if search:
-        sql += " WHERE surname LIKE ?"
-        params.append(f"%{search}%")
+        clause, params = _search_clause(search)
+        sql += f" WHERE {clause}"
     sql += " ORDER BY client_id LIMIT ? OFFSET ?"
     params += [limit, offset]
     cur = await conn.execute(sql, params)

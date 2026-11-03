@@ -115,6 +115,22 @@ def test_search_by_surname(store_paths):
     asyncio.run(scenario())
 
 
+def test_search_by_numeric_ids(store_paths):
+    """Цифровой запрос: точное совпадение по client_id / csv_id / CustomerId + фамилия-подстрока."""
+    async def scenario():
+        await store.init_clients_store()
+        try:
+            assert (await store.fetch_client(1))["surname"] == "Petrova"
+            assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="1")] == ["Petrova"]
+            assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="15000")] == ["Ivanov"]
+            assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="15600512")] == ["Smirnov"]
+            assert await store.count_clients(search="150") == 0  # частичный ID не матчится
+        finally:
+            await store.close_clients_store()
+
+    asyncio.run(scenario())
+
+
 def test_missing_csv_is_empty_store(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIENTS_CSV_PATH", str(tmp_path / "absent.csv"))
     monkeypatch.setenv("CLIENTS_DB_PATH", str(tmp_path / "clients.db"))

@@ -22,6 +22,12 @@ FEATURE_MAP = {
 
 # Список бинарных флагов, которые нужно переводить в Да/Нет
 BINARY_FEATURES = [
-    "is_germany", "is_single_product", "is_3plus_products", "is_age_over_45", 
+    "is_germany", "is_single_product", "is_3plus_products", "is_age_over_45",
     "is_zero_balance", "is_high_balance_inactive", "HasCrCard", "IsActiveMember"
 ]
+
+# Русские значения категориальных фичей: в CSV они записаны сырьём (Female, France)
+FEATURE_VALUE_MAPS = {
+    "Gender": {"Female": "Женский", "Male": "Мужской"},
+    "Geography": {"France": "Франция", "Spain": "Испания", "Germany": "Германия"},
+}

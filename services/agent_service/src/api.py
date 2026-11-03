@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
-from shared.constants import BINARY_FEATURES, FEATURE_MAP
+from shared.constants import BINARY_FEATURES, FEATURE_MAP, FEATURE_VALUE_MAPS
 from shared.utils.logger import get_logger
 from shared.utils.text import sanitize_llm_text
 
@@ -300,6 +300,9 @@ def _format_value(feature: str, value) -> str:
             return "Да" if int(value) == 1 else "Нет"
         except (TypeError, ValueError):
             return str(value)
+    value_map = FEATURE_VALUE_MAPS.get(feature)
+    if value_map:
+        return value_map.get(str(value), str(value))
     return str(value)
 
 
@@ -399,11 +402,17 @@ async def _fetch_risks(client_ids: list[int]) -> dict[int, float | None]:
     return risks
 
 
+def _display_client(row: dict) -> dict:
+    """Строка для UI: категориальные значения в русском отображении."""
+    value_map = FEATURE_VALUE_MAPS.get("Geography", {})
+    return {**row, "geography": value_map.get(row["geography"], row["geography"])}
+
+
 @router.get("/clients")
 async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None):
     """Страница выгрузки клиентов с вероятностями оттока (None, если predict-сервис недоступен).
 
-    q — поиск по фамилии (LIKE, в БД clients_store).
+    q — поиск по фамилии или ID (в БД clients_store).
     """
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -413,7 +422,10 @@ async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None):
     except store.StoreNotReady:
         raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
     risks = await _fetch_risks([row["client_id"] for row in rows])
-    clients = [{**row, "churn_probability": risks.get(row["client_id"])} for row in rows]
+    clients = [
+        {**_display_client(row), "churn_probability": risks.get(row["client_id"])}
+        for row in rows
+    ]
     return {"total": total, "clients": clients}
 
 
@@ -428,7 +440,7 @@ async def get_client(client_id: int):
         raise HTTPException(404, f"Клиент {client_id} не найден в выгрузке")
     prediction = await _fetch_prediction(client_id)
     row["churn_probability"] = prediction.get("churn_probability") if prediction else None
-    return row
+    return _display_client(row)
 
 
 @router.get("/health")

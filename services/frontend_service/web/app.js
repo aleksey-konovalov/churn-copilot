@@ -47,7 +47,8 @@ const state = {
   clientsTotal: 0,
   clientsLoaded: false,
   clientsLoading: false,
-  clientsQuery: "",         // поиск по фамилии (серверный, q в /api/clients)
+  clientsPage: 0,           // текущая страница пагинатора (смещение = page * PAGE_SIZE)
+  clientsQuery: "",         // поиск по фамилии/ID (серверный, q в /api/clients)
   clientsFilter: "all",     // all | high | mid | low
   activeRow: null,
   analyses: new Map(),      // client_id (string) -> analysis
@@ -424,13 +425,15 @@ async function sendMessage() {
 
 /* ---------- клиенты ---------- */
 
+const PAGE_SIZE = 50;
+
 async function loadClients() {
   if (state.clientsLoading) return;
   state.clientsLoading = true;
   renderClientsMeta();
   try {
     const q = state.clientsQuery ? `&q=${encodeURIComponent(state.clientsQuery)}` : "";
-    const resp = await api(`/api/clients?limit=50${q}`);
+    const resp = await api(`/api/clients?limit=${PAGE_SIZE}&offset=${state.clientsPage * PAGE_SIZE}${q}`);
     const data = await resp.json();
     state.clients = data.clients || [];
     state.clientsTotal = data.total || 0;
@@ -443,8 +446,44 @@ async function loadClients() {
     state.clientsLoading = false;
     renderClientsMeta();
     renderClientsTable();
+    renderClientsPager();
     renderSidebar();
   }
+}
+
+function renderClientsPager() {
+  const box = $("#cl-pager");
+  if (!box) return;
+  const pages = Math.ceil(state.clientsTotal / PAGE_SIZE);
+  if (!state.clientsLoaded || pages <= 1) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const cur = state.clientsPage;
+  // Окно номеров: первая, последняя и соседние с текущей; между разрывами — многоточие
+  const nums = [...new Set([0, pages - 1, cur - 1, cur, cur + 1].filter((p) => p >= 0 && p < pages))]
+    .sort((a, b) => a - b);
+  let btns = "";
+  nums.forEach((p, i) => {
+    if (i && p - nums[i - 1] > 1) btns += '<span class="pg-dots">…</span>';
+    btns += `<button type="button" class="${p === cur ? "active" : ""}" data-page="${p}" aria-label="Страница ${p + 1}">${p + 1}</button>`;
+  });
+  box.innerHTML = `
+    <span class="pg-info">стр. ${cur + 1} из ${pages}</span>
+    <div class="pg-btns">
+      <button type="button" data-page="${cur - 1}" ${cur === 0 ? "disabled" : ""} aria-label="Назад">←</button>
+      ${btns}
+      <button type="button" data-page="${cur + 1}" ${cur >= pages - 1 ? "disabled" : ""} aria-label="Вперёд">→</button>
+    </div>`;
+}
+
+async function goToClientsPage(page) {
+  if (page < 0 || page === state.clientsPage) return;
+  state.clientsPage = page;
+  await loadClients();
+  const area = $(".table-area");
+  if (area) area.scrollTop = 0;
 }
 
 /** Клиент по id напрямую из API: deep-link вне загруженной страницы, свежий риск для карточки. */
@@ -476,7 +515,7 @@ function renderClientsView() {
     <header class="main-head">
       <div class="crumb">Клиенты · выгрузка</div>
       <input class="head-search" id="cl-search" type="search" autocomplete="off"
-             placeholder="Поиск по фамилии…" value="${esc(state.clientsQuery)}">
+             placeholder="Поиск по фамилии или ID…" value="${esc(state.clientsQuery)}">
       <div class="head-meta" id="cl-meta"></div>
     </header>
     <div class="table-area">
@@ -487,6 +526,7 @@ function renderClientsView() {
         <tbody id="cl-body"></tbody>
       </table>
     </div>
+    <div class="cl-pager" id="cl-pager" hidden></div>
     <div class="drawer hidden" id="drawer">
       <div class="drawer-handle"></div>
       <div class="drawer-tabs" id="drawer-tabs"></div>
@@ -494,19 +534,26 @@ function renderClientsView() {
       <div class="drawer-status" id="drawer-status">copilot ›</div>
     </div>`;
 
-  // Серверный поиск по фамилии: дебаунс, чтобы не дёргать API на каждый символ
+  // Серверный поиск по фамилии/ID: дебаунс, чтобы не дёргать API на каждый символ
   const search = $("#cl-search");
   let debounce;
   search.addEventListener("input", () => {
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       state.clientsQuery = search.value.trim();
+      state.clientsPage = 0; // новый запрос — с первой страницы
       loadClients();
     }, 300);
   });
 
+  $("#cl-pager").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-page]");
+    if (btn) goToClientsPage(Number(btn.dataset.page));
+  });
+
   renderClientsMeta();
   renderClientsTable();
+  renderClientsPager();
   if (!state.clientsLoaded && !state.clientsLoading) loadClients();
   renderDrawer();
 }
@@ -532,7 +579,7 @@ function renderClientsTable() {
     const empty = state.clientsLoading
       ? "Загрузка…"
       : state.clientsQuery
-        ? "Ничего не найдено по этой фамилии"
+        ? "Ничего не найдено"
         : "Нет клиентов в этом списке";
     body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-3)">${empty}</td></tr>`;
     return;
