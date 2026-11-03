@@ -2,8 +2,7 @@ services:
   churn_pred_service:
     build: ./services/churn_pred_service
     container_name: churn_pred_service
-    ports:
-      - "3010:3010"
+    # Порты наружу не публикуются: доступ только по внутренней сети compose
     volumes:
       # Монтируем папку data_science внутрь контейнера для доступа к модели и test'y.
       - ./data_science:/opt/data_science
@@ -19,8 +18,6 @@ services:
       context: .
       dockerfile: ./services/embedding_service/Dockerfile 
     container_name: embedding_service
-    ports:
-      - "3020:3020"
     volumes:
       - app-cache:/app/.cache
     runtime: nvidia
@@ -51,7 +48,7 @@ services:
     env_file:
       - ./services/vllm/.env  # Для варьирования параметров без ребилда
     ports:
-      - "3040:8901"
+      - "3040:8901"  # единственный внутренний сервис с портом на хосте: dev-режим агента (make run-agent) и отладка LLM
     volumes:
       - vllm-models:/root/.cache/huggingface # Чтобы не качать модель заново каждый раз
     deploy:
@@ -65,12 +62,62 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.16.2
-    user: "${UID:-1000}:${GID:-1000}"    
-    ports:
-      - "3030:6333"
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
       - ./infra/qdrant/storage:/qdrant/storage       # Хранение векторных баз
       - ./infra/qdrant/snapshots:/qdrant/snapshots   # Хранение снапшотов
+    restart: unless-stopped
+
+  agent_service:
+    build:
+      context: .
+      dockerfile: ./services/agent_service/Dockerfile
+    container_name: agent_service
+    environment:
+      - SERVICE_NAME=agent_service
+      - LOG_TO_FILE=false
+      # --- LLM: vLLM в compose-сети (тяжёлый контейнер поднимается отдельно, make up его не включает) ---
+      # Значения по умолчанию можно переопределить в .env корня репозитория без правки compose:
+      # например, LLM_BASE_URL=http://host.docker.internal:3040/v1 — vLLM, развёрнутый на хосте.
+      - ACTIVE_LLM_PROFILE=local_qwen_agent
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8901/v1}
+      - LLM_MODEL=${LLM_MODEL:-Qwen3.6}
+      # --- Зависимости агента в compose-сети ---
+      - CHURN_PRED_SERVICE_URL=http://churn_pred_service:3010
+      - EMBEDDING_SERVICE_URL=http://embedding_service:3020
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - COLLECTION_NAME=policies
+      # --- Данные: CSV-выгрузка read-only, состояние (checkpointer + БД клиентов) в volume ---
+      - CLIENTS_CSV_PATH=/data/test.csv
+      - CHECKPOINT_DB_PATH=/data/checkpoints.db
+      - CLIENTS_DB_PATH=/data/clients.db
+    volumes:
+      - ./data_science/data/raw/test.csv:/data/test.csv:ro
+      - agent-data:/data
+    # DNS-имя хоста внутри контейнера — для LLM_BASE_URL=http://host.docker.internal:PORT/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - churn_pred_service
+      - embedding_service
+      - qdrant
+    restart: unless-stopped
+
+  frontend_service:
+    build:
+      context: .
+      dockerfile: ./services/frontend_service/Dockerfile
+    container_name: frontend_service
+    ports:
+      - "3050:3050"  # единственный пользовательский порт: UI + прокси на agent_service
+    environment:
+      - SERVICE_NAME=frontend_service
+      - LOG_TO_FILE=false
+      - AGENT_SERVICE_URL=http://agent_service:7860
+      - FRONTEND_PORT=3050
+    depends_on:
+      - agent_service
     restart: unless-stopped
 
   rag_indexing_service:
@@ -114,3 +161,4 @@ services:
 volumes:
   app-cache:
   vllm-models:
+  agent-data:

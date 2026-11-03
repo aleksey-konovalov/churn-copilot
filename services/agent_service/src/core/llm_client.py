@@ -48,9 +48,12 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
     extra_body = profile_config.get("extra_body")
 
     # Инициализация клиента
+    # ENV-оверрайды перенаправляют LLM-трафик для всех профилей (например, из
+    # docker-сети: LLM_BASE_URL=http://vllm:8901/v1, см. docker-compose.yml).
+    # LLM_MODEL — имя модели на сервере (SERVED_MODEL_NAME vLLM), если отличается от конфига.
     llm = ChatOpenAI(
-        model=profile_config["model"],
-        base_url=profile_config["base_url"],
+        model=os.getenv("LLM_MODEL") or profile_config["model"],
+        base_url=os.getenv("LLM_BASE_URL") or profile_config["base_url"],
         api_key=api_key,
         temperature=temperature,
         top_p=top_p,

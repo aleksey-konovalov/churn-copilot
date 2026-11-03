@@ -124,6 +124,7 @@ def build_root_agent(checkpointer, model=None):
 
 root_agent = None
 _checkpointer_conn = None
+_db_path = None
 
 
 async def init_root_agent() -> None:
@@ -132,7 +133,7 @@ async def init_root_agent() -> None:
     Вызывается один раз при старте сервиса: соединение aiosqlite должно жить
     в том же event loop, который обслуживает запросы.
     """
-    global root_agent, _checkpointer_conn
+    global root_agent, _checkpointer_conn, _db_path
 
     db_path = os.getenv("CHECKPOINT_DB_PATH") or str(
         Path(__file__).resolve().parents[1] / "checkpoints.db"
@@ -140,20 +141,27 @@ async def init_root_agent() -> None:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     _checkpointer_conn = await aiosqlite.connect(db_path)
+    _db_path = db_path
     root_agent = build_root_agent(AsyncSqliteSaver(_checkpointer_conn))
     logger.info(f"root_agent готов (checkpointer: {db_path})")
 
 
 async def shutdown_root_agent() -> None:
     """Закрывает соединение checkpointer'а при остановке сервиса."""
-    global root_agent, _checkpointer_conn
+    global root_agent, _checkpointer_conn, _db_path
     if _checkpointer_conn is not None:
         await _checkpointer_conn.close()
         logger.info("Соединение checkpointer'а закрыто")
     _checkpointer_conn = None
+    _db_path = None
     root_agent = None
 
 
 def get_root_agent():
     """Доступ к корневому агенту после init_root_agent()."""
     return root_agent
+
+
+def get_checkpoint_db_path() -> str | None:
+    """Путь к SQLite-файлу checkpointer'а: там же живет служебная таблица потоков API-слоя."""
+    return _db_path

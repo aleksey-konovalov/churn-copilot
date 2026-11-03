@@ -22,30 +22,32 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│ Менеджер  →  Gradio UI (:7860)  →  root_agent (LangGraph)                       │
-│                                         │                                       │
+│ Менеджер  →  Web UI (:3050)  →  agent_service API  →  root_agent                │
+│  (frontend_service:             (REST/SSE, LangGraph, checkpointer)             │
+│   статика + прокси /api)                │                                       │
 │                     get_churn_analisys_and_retention (sub-agent)                │
 │                                         │                                       │
 │                                 get_churn_info (tool)                           │
 │                    ┌────────────────────┼────────────────────┐                  │
 │                    ▼                    ▼                    ▼                  │
-│           churn_pred :3010     embedding_service      vLLM :3040                │
+│           churn_pred           embedding_service      vLLM (:3040)              │
 │           CatBoost + SHAP               │              Qwen3.6                  │
 │                                         ▼                                       │
 │                                    RAG-поиск                                    │
-│                                   Qdrant :3030                                  │
+│                                    Qdrant                                       │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Сервис | Порт | Назначение |
-|--------|------|------------|
-| `churn_pred_service` | 3010 | Inference CatBoost + TreeSHAP |
-| `embedding_service` | 3020 | Эмбеддинги для RAG (FRIDA / Giga) |
-| `qdrant` | 3030 | Векторное хранилище политик |
-| `vllm` | 3040 | Локальный LLM (OpenAI-compatible API) |
-| `agent_service` | 7860 | Gradio-чат (запуск локально) |
-| `rag_indexing_service` | — | Batch-индексация (Docker profile) |
-| `dev-tools` | — | Скачивание ассетов и снапшотов (Docker profile) |
+| Сервис | Порт в compose-сети | На хосте | Назначение |
+|--------|------|------|------------|
+| `frontend_service` | 3050 | **3050** | Веб-интерфейс: клиенты + чаты (статика + прокси /api) |
+| `churn_pred_service` | 3010 | — | Inference CatBoost + TreeSHAP |
+| `embedding_service` | 3020 | — | Эмбеддинги для RAG (FRIDA / Giga) |
+| `qdrant` | 6333 | — | Векторное хранилище политик |
+| `vllm` | 8901 | **3040** | Локальный LLM (OpenAI-compatible API) |
+| `agent_service` | 7860 | — | REST/SSE API агента (LangGraph, checkpointer, SQLite-выгрузка клиентов) |
+| `rag_indexing_service` | — | — | Batch-индексация (Docker profile) |
+| `dev-tools` | — | — | Скачивание ассетов и снапшотов (Docker profile) |
 
 **Multi-agent design:** корневой агент ведёт диалог и делегирует экспертизу суб-агенту удержания. Каждый уровень имеет узкий набор tools и жёсткие промпты (запрет на выдумывание ID, политик, профилей).
 
@@ -70,7 +72,8 @@ churn_copilot/
 │       └── feature_engineering.py   # Единый pipeline train ↔ serve
 ├── infra/qdrant/               # Persistence векторной БД
 ├── services/
-│   ├── agent_service/          # LangGraph + Gradio UI
+│   ├── agent_service/          # LangGraph + REST/SSE API
+│   ├── frontend_service/       # Веб-интерфейс: статика + прокси /api
 │   ├── churn_pred_service/     # FastAPI inference
 │   ├── embedding_service/      # FastAPI embeddings
 │   ├── rag_indexing_service/   # One-shot indexer
@@ -128,14 +131,42 @@ docker compose --profile rag_indexing up rag_indexing_service
 
 > Убедитесь, что `COLLECTION_NAME` в `.env` агента совпадает с `QDRANT_COLLECTION` в compose (`policies`).
 
-### 3. Запуск фронта с агентом
+### 3. Запуск фронта с агентом (Docker)
 
 ```bash
-cd services/agent_service
-cp env.example .env
-pip install -r requirements.txt gradio
-python src/main.py   # → http://localhost:7860
+make up   # поднимает всё, кроме vLLM: churn_pred, embedding, qdrant, agent_service, frontend_service
 ```
+
+Веб-интерфейс: **http://localhost:3050** (единственный пользовательский порт — фронт проксирует 
+REST/SSE API агента, который наружу не публикуется). Состояние агента (checkpointer + БД клиентов) 
+живёт в docker volume `agent-data`, так что чаты и выгрузка переживают `make down` / `make up`. 
+Перезаливка кода в образы — тот же `make up` (--build).
+
+vLLM — самый тяжёлый контейнер (GPU, 27B AWQ). Когда он нужен:
+
+```bash
+docker compose up -d vllm   # агент найдёт его по имени: http://vllm:8901/v1 (LLM_BASE_URL в compose)
+```
+
+**Про порты:** наружу публикуются только `3050` (UI) и `3040` (vLLM — для локальных клиентов LLM и отладки). 
+Остальные сервисы доступны только по внутренней сети compose: меньше путаницы и конфликтов портов 
+с другими приложениями. Отладка внутрь — `docker compose exec`, REST qdrant из целей Makefile 
+(`restore-qdrant`, `save-snapshot`) ходит через одноразовый curl-контейнер в сети compose.
+
+Раздел «Клиенты» (открывается по умолчанию) читает выгрузку из SQLite (CSV `data_science/data/raw/test.csv` 
+перегоняется в БД при старте agent_service, client_id = номер строки CSV): поиск по фамилии или ID — 
+на сервере, листалка страниц внизу таблицы. Кнопка «Анализ оттока» открывает справа панель с двумя 
+подвкладками: «Анализ оттока» (риск, факторы SHAP, стрим разбора агента) и «Карточка клиента» 
+(атрибуты). Оттуда «Продолжить в чате» — агент уже будет помнить разбор. Ответы агента рендерятся 
+как markdown — и в чате, и в панели анализа. Чаты удаляются из списка кнопкой «×» (второй клик 
+подтверждает удаление вместе с историей).
+
+### Запуск сервисов без Makefile
+
+Цели `run-agent` / `run-frontend` убраны: сервисы ходят друг к другу и к зависимостям по внутренней 
+сети compose, с хоста она недоступна, поэтому локальный запуск вне Docker не поддерживается. 
+При необходимости оба сервиса можно поднять вручную (`uvicorn main:app` / `uvicorn server:app`), 
+но полноценно всё работает только через `make up`.
 
 ---
 
@@ -218,11 +249,14 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 
 ### 8. Docker / MLOps практики
 
+- прикладной стек полностью в контейнерах: `make up` поднимает всё, кроме vLLM (`--build` — правки кода попадают в образы без ручных шагов);
+- выгрузка клиентов живёт в SQLite (`clients_store` в agent_service): идемпотентная перегонка CSV при старте (по mtime/size файла), состояние — в volume `agent-data`;
 - hot-reload модели и данных через volume mount;
 - Docker profile `rag_indexing` для batch-job (`restart: "no"`);
 - HF cache volumes для embedding/vLLM;
 - Qdrant persistence в `infra/qdrant/`;
-- env-based конфигурация vLLM без rebuild.
+- env-based конфигурация vLLM без rebuild;
+- `LLM_BASE_URL` env-оверрайд: один llm_config.json работает и локально (localhost:3040), и в compose-сети (vllm:8901).
 
 ---
 
@@ -234,8 +268,12 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 
 ### API prediction-сервиса
 
-```http
-GET http://localhost:3010/predict?client_id=42
+Порт наружу не публикуется: из сети compose — `http://churn_pred_service:3010`, с хоста — 
+через одноразовый контейнер:
+
+```bash
+docker run --rm --network churn_copilot_default curlimages/curl \
+  "http://churn_pred_service:3010/predict?client_id=42"
 ```
 
 ```json
@@ -263,7 +301,7 @@ GET http://localhost:3010/predict?client_id=42
 | Agent | LangChain 1.0, LangGraph, Tool Calling |
 | LLM | vLLM + Qwen3.6-27B-AWQ; fallback OpenAI |
 | RAG | Qdrant, FRIDA embeddings |
-| API / UI | FastAPI, Gradio, httpx |
+| API / UI | FastAPI, vanilla JS SPA, httpx |
 | Infra | Docker Compose, NVIDIA GPU |
 
 ---

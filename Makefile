@@ -3,6 +3,10 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 export UID GID
 
+# API qdrant из целей хоста: порт наружу не публикуется, поэтому curl запускается
+# одноразовым контейнером в сети compose (имя сети — <проект>_default)
+QDRANT_CURL := docker run --rm --network churn_copilot_default curlimages/curl
+
 .PHONY: download-assets
 download-assets:
 	@echo "Downloading model, datasets, and Qdrant artifacts..."
@@ -30,7 +34,7 @@ restore-qdrant: download-assets
 	fi; \
 	echo "Waiting for Qdrant to become ready..."; \
 	RETRIES=30; \
-	until curl -sS http://localhost:3030/healthz > /dev/null 2>&1; do \
+	until $(QDRANT_CURL) -sS http://qdrant:6333/healthz > /dev/null 2>&1; do \
 		RETRIES=$$((RETRIES - 1)); \
 		if [ $$RETRIES -le 0 ]; then \
 			echo "Qdrant failed to start within the timeout." && exit 1; \
@@ -43,13 +47,13 @@ restore-qdrant: download-assets
 	fi; \
 	CONTAINER_NAME=$$(docker inspect --format '{{.Name}}' $$CONTAINER_ID | sed 's/^\///'); \
 	echo "Container name: $$CONTAINER_NAME"; \
-	curl -sS -X DELETE "http://localhost:3030/collections/$$COLLECTION_NAME" > /dev/null 2>&1; \
+	$(QDRANT_CURL) -sS -X DELETE "http://qdrant:6333/collections/$$COLLECTION_NAME" > /dev/null 2>&1; \
 	echo "Copying snapshot directly into container via docker cp..."; \
 	docker exec "$$CONTAINER_NAME" mkdir -p /qdrant/snapshots/$$COLLECTION_NAME; \
 	docker cp "$$SNAPSHOT_DIR/snapshot.snapshot" "$$CONTAINER_NAME:/qdrant/snapshots/$$COLLECTION_NAME/snapshot.snapshot"; \
 	docker exec "$$CONTAINER_NAME" chmod 644 /qdrant/snapshots/$$COLLECTION_NAME/snapshot.snapshot; \
 	echo "Recreating collection directly from snapshot file..."; \
-	RESTORE_RESPONSE=$$(curl -sS -X PUT "http://localhost:3030/collections/$$COLLECTION_NAME?snapshot=/qdrant/snapshots/$$COLLECTION_NAME/snapshot.snapshot" \
+	RESTORE_RESPONSE=$$($(QDRANT_CURL) -sS -X PUT "http://qdrant:6333/collections/$$COLLECTION_NAME?snapshot=/qdrant/snapshots/$$COLLECTION_NAME/snapshot.snapshot" \
 		-H "Content-Type: application/json" \
 		-d '{"vectors": {"size": 1536, "distance": "Cosine"}}'); \
 	echo "Restore initiated response: $$RESTORE_RESPONSE"; \
@@ -73,7 +77,7 @@ save-snapshot:
 	if [ -z "$$CONTAINER_NAME" ]; then \
 		echo "Qdrant container is not running. Please start it with 'docker compose up qdrant -d'." && exit 1; \
 	fi; \
-	CREATE_RESPONSE=$$(curl -sS -X POST "http://localhost:3030/collections/$$COLLECTION_NAME/snapshots"); \
+	CREATE_RESPONSE=$$($(QDRANT_CURL) -sS -X POST "http://qdrant:6333/collections/$$COLLECTION_NAME/snapshots"); \
 	SNAPSHOT_NAME=$$(echo "$$CREATE_RESPONSE" | grep -o '"name":"[^"]*"' | grep -o '[^"]*\.snapshot' | head -n 1); \
 	if [ -z "$$SNAPSHOT_NAME" ]; then \
 		echo "Failed to create snapshot. Response: $$CREATE_RESPONSE" && exit 1; \
@@ -85,3 +89,13 @@ save-snapshot:
 		echo "Failed to copy snapshot from container. Please check Qdrant container name and paths." && exit 1; \
 	fi; \
 	echo "Snapshot saved successfully to $$SNAPSHOT_DIR/snapshot.snapshot"
+
+# --- Полный стек в Docker, кроме vLLM (тяжёлый GPU-контейнер поднимается отдельно) ---
+
+.PHONY: up
+up:
+	docker compose up -d --build churn_pred_service embedding_service qdrant agent_service frontend_service
+
+.PHONY: down
+down:
+	docker compose down

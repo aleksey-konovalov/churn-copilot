@@ -8,7 +8,8 @@ app-cache/
 *.cbm
 
 # Agent service: persistent память (SQLite checkpointer)
-services/agent_service/checkpoints.db*
+services/agent_service/**/checkpoints.db*
+services/agent_service/**/clients.db*
 
 # Qdrant
 infra/qdrant/storage/*

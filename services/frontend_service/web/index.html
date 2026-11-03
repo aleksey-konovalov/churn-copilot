@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Churn Copilot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23171717'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="side">
+      <div class="side-head">
+        <div class="brand"><span class="brand-mark"></span>Churn Copilot</div>
+        <div class="seg" id="seg" role="group" aria-label="Раздел">
+          <button type="button" data-view="clients">Клиенты</button>
+          <button type="button" data-view="chats">Чаты</button>
+        </div>
+        <button class="newchat" id="new-chat" type="button">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+          Новый чат
+        </button>
+      </div>
+      <nav class="chatlist" id="side-list" aria-label="Список"></nav>
+      <div class="side-foot">
+        <div class="avatar">М</div>
+        <div class="who">
+          <div class="who-name">Менеджер</div>
+          <div class="who-sub" id="conn-status">подключение…</div>
+        </div>
+      </div>
+    </aside>
+    <div class="col">
+      <main class="main" id="main"></main>
+    </div>
+    <aside class="cpanel" id="client-panel" hidden>
+      <div class="cp-head">
+        <span class="cp-title"><code id="cp-id">#—</code><span id="cp-name"></span></span>
+        <button class="cp-close" id="panel-close" type="button" aria-label="Закрыть панель">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+      <div class="cp-tabs" role="tablist" aria-label="Подвкладки клиента">
+        <button class="cp-tab active" id="cp-tab-razbor" data-panel-tab="razbor" role="tab" aria-selected="true" type="button">Анализ оттока</button>
+        <button class="cp-tab" id="cp-tab-card" data-panel-tab="card" role="tab" aria-selected="false" type="button">Карточка клиента</button>
+      </div>
+      <div class="cp-scroll">
+        <div id="cp-pane-razbor" role="tabpanel" aria-labelledby="cp-tab-razbor"></div>
+        <div id="cp-pane-card" role="tabpanel" aria-labelledby="cp-tab-card" hidden></div>
+      </div>
+      <button class="cp-cta" id="panel-continue" type="button">
+        Продолжить в чате
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+      </button>
+    </aside>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
