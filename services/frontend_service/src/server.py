@@ -6,24 +6,29 @@
 потоково, без буферизации.
 """
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from shared.utils.logger import get_logger
+from shared.utils.http import create_async_client
+from shared.utils.logger import get_logger, setup_logging
+from shared.utils.request_id import ensure_request_id, request_id_var
 
+SERVICE_NAME = os.getenv("SERVICE_NAME", "frontend_service")
+setup_logging(SERVICE_NAME)
 logger = get_logger(name="frontend_service.server")
 
 AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://localhost:7860").rstrip("/")
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
-_client = httpx.AsyncClient(base_url=AGENT_SERVICE_URL, timeout=None)
+_client = create_async_client(base_url=AGENT_SERVICE_URL, timeout=httpx.Timeout(None))
 
 
 @asynccontextmanager
@@ -35,6 +40,28 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Churn Copilot Frontend Service", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_id_middleware(
+    request: Request,
+    call_next,
+) -> Response:
+    """Сквозной request_id: frontend — точка входа, генерирует id на каждый запрос."""
+    rid = ensure_request_id(request.headers.get("x-request-id"))
+    request_id_var.set(rid)
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["x-request-id"] = rid
+    logger.info(
+        "%s %s -> %s (%.0f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        (time.perf_counter() - started) * 1000,
+    )
+    return response
+
 
 # Заголовки hop-by-hop и длины при стриминге прокси не переносит
 _SKIP_HEADERS = {"content-length", "transfer-encoding", "connection"}
@@ -51,6 +78,8 @@ async def proxy_api(path: str, request: Request):
         for key, value in request.headers.items()
         if key.lower() in ("content-type", "accept", "authorization")
     }
+    # Трассировка: agent_service залогирует тот же request_id в своих строках
+    headers["x-request-id"] = request_id_var.get()
     try:
         upstream_response = await _client.send(
             _client.build_request(

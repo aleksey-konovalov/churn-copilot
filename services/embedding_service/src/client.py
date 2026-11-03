@@ -2,6 +2,7 @@ import os
 import httpx
 from typing import List, Literal
 
+from shared.utils.http import create_async_client
 from shared.utils.logger import get_logger
 
 logger = get_logger("embedding_service.client")
@@ -10,11 +11,12 @@ EMBEDDING_SERVICE_URL = os.getenv('EMBEDDING_SERVICE_URL', 'http://embedding_ser
 
 class EmbeddingClient:
     """Асинхронный клиент для запросов к embedding-сервису с переиспользованием соединений."""
-    
+
     def __init__(self, base_url: str = EMBEDDING_SERVICE_URL):
         self.base_url = base_url
-        # httpx.AsyncClient переиспользует соединения (Connection Pooling)
-        self.client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+        # httpx.AsyncClient переиспользует соединения (Connection Pooling);
+        # транспорт прокидывает X-Request-ID текущего запроса agent_service
+        self.client = create_async_client(timeout=60.0)
     
     async def get_embeddings(
         self, 

@@ -1,23 +1,28 @@
 import os
 import asyncio
+import time
 import warnings
 from contextlib import asynccontextmanager
 from typing import List, Literal
 
 import uvicorn
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv, find_dotenv
 from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
-from shared.utils.logger import get_logger
-
-logger = get_logger("embedding_service.server")
+from shared.utils.logger import get_logger, setup_logging
+from shared.utils.request_id import ensure_request_id, request_id_var
 
 warnings.filterwarnings("ignore", message=".*torch.backends.cuda.sdp_kernel.*deprecated.*", category=FutureWarning)
 load_dotenv(find_dotenv())
+
+# После load_dotenv: LOG_LEVEL/LOG_FORMAT могут прийти из локального .env
+setup_logging(os.getenv("SERVICE_NAME", "embedding_service"))
+logger = get_logger("embedding_service.server")
 
 
 # Конфигурация
@@ -128,6 +133,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Embedding Service", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_id_middleware(
+    request: Request,
+    call_next,
+) -> Response:
+    """Сквозной request_id: принимает клиентский (от agent_service) или свой."""
+    rid = ensure_request_id(request.headers.get("x-request-id"))
+    request_id_var.set(rid)
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["x-request-id"] = rid
+    logger.info(
+        "%s %s -> %s (%.0f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        (time.perf_counter() - started) * 1000,
+    )
+    return response
 
 
 class EmbeddingRequest(BaseModel):

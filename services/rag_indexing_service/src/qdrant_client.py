@@ -4,7 +4,9 @@ from typing import List, Dict
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
-from shared.utils.logger import app_logger
+from shared.utils.logger import get_logger
+
+logger = get_logger("rag_indexing_service.qdrant_client")
 
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
@@ -18,7 +20,7 @@ async def ensure_collection(client: AsyncQdrantClient) -> None:
     distance = Distance.COSINE
 
     if COLLECTION_NAME not in names:
-        app_logger.info(f"[Qdrant] Creating collection '{COLLECTION_NAME}' (size={VECTOR_SIZE}, distance={distance})")
+        logger.info(f"[Qdrant] Creating collection '{COLLECTION_NAME}' (size={VECTOR_SIZE}, distance={distance})")
         await client.create_collection(
             collection_name=COLLECTION_NAME,
             # Добавляем указание имени пространства для каждого вектора
@@ -30,7 +32,7 @@ async def ensure_collection(client: AsyncQdrantClient) -> None:
             },
         )
     else:
-        app_logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' already exists.")
+        logger.info(f"[Qdrant] Collection '{COLLECTION_NAME}' already exists.")
 
 
 async def batch_upsert(
@@ -45,7 +47,7 @@ async def batch_upsert(
             collection_name=COLLECTION_NAME, 
             points=batch
         )
-        app_logger.info(f"[Qdrant] Upserted batch {i//batch_size + 1} ({len(batch)} points).")
+        logger.info(f"[Qdrant] Upserted batch {i//batch_size + 1} ({len(batch)} points).")
 
 
 def make_point(idx: int, vector: List[float], payload: Dict) -> PointStruct:
