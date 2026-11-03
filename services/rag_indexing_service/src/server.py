@@ -64,67 +64,75 @@ async def load_and_chunk_file(filepath: str, filename: str) -> List[Dict]:
     return chunks
 
 
-async def main():
-    app_logger.info(f"Starting RAG indexing from '{RAG_DATA_DIR}'")
-
-    # Подключаемся к Qdrant
-    qdrant = AsyncQdrantClient(url=QDRANT_URL)
+async def reset_collection(qdrant: AsyncQdrantClient) -> None:
+    """Пересоздает коллекцию, чтобы в базе не оставались чанки политик,
+    удаленные из исходных файлов при переиндексации."""
+    collections = await qdrant.get_collections()
+    if COLLECTION_NAME in [c.name for c in collections.collections]:
+        app_logger.info(f"[Qdrant] Dropping existing collection '{COLLECTION_NAME}' for full reindex")
+        await qdrant.delete_collection(COLLECTION_NAME)
     await ensure_collection(qdrant)
 
-    # Инициализируем клиент эмбеддингов и дожидаемся готовности сервиса
-    embedding_client = EmbeddingClient()
-    await wait_for_embedding_service(embedding_client)
+
+async def main():
+    app_logger.info(f"Starting RAG indexing from '{RAG_DATA_DIR}'")
 
     if not os.path.isdir(RAG_DATA_DIR):
         raise RuntimeError(f"Directory '{RAG_DATA_DIR}' does not exist.")
 
-    # Чтение и чанкинг всех txt-файлов
-    all_chunks: List[Dict] = []
-    for filename in sorted(os.listdir(RAG_DATA_DIR)):
-        if not filename.endswith(".txt"):
-            continue
-        filepath = os.path.join(RAG_DATA_DIR, filename)
-        chunks = await load_and_chunk_file(filepath, filename)
-        app_logger.info(f"Loaded {len(chunks)} chunks from '{filename}'.")
-        all_chunks.extend(chunks)
-
-    app_logger.info(f"Total chunks to index: {len(all_chunks)}")
-    if not all_chunks:
-        app_logger.warning("No chunks found. Exit.")
-        return
-    
-    # Подключение к Qdrant и создание коллекции
     qdrant = AsyncQdrantClient(url=QDRANT_URL)
-    await ensure_collection(qdrant)
-
-    # Эмбеддинг и загрузка батчами
     embedding_client = EmbeddingClient()
-    points: List[PointStruct] = []
-    idx = 0
+    try:
+        # Чтение и чанкинг всех txt-файлов ДО пересоздания коллекции:
+        # при пустом корпусе базу не трогаем
+        all_chunks: List[Dict] = []
+        for filename in sorted(os.listdir(RAG_DATA_DIR)):
+            if not filename.endswith(".txt"):
+                continue
+            filepath = os.path.join(RAG_DATA_DIR, filename)
+            chunks = await load_and_chunk_file(filepath, filename)
+            app_logger.info(f"Loaded {len(chunks)} chunks from '{filename}'.")
+            all_chunks.extend(chunks)
 
-    for i in range(0, len(all_chunks), BATCH_SIZE):
-        batch = all_chunks[i : i + BATCH_SIZE]
-        texts = [chunk["content"] for chunk in batch]
-        embeddings = await embedding_client.get_embeddings(
-            texts, task=EMBEDDING_TASK
-        )
-        for chunk, vector in zip(batch, embeddings):
-            payload = {
-                "title": chunk["title"],
-                "content": chunk["content"],
-                "source_file": chunk["source_file"],
-                "retention": True,
-            }
-            points.append(make_point(idx=idx, vector=vector, payload=payload))
-            idx += 1
-        app_logger.info(f"Embedded batch {i//BATCH_SIZE + 1}/{(len(all_chunks)-1)//BATCH_SIZE + 1}")
+        app_logger.info(f"Total chunks to index: {len(all_chunks)}")
+        if not all_chunks:
+            app_logger.warning("No chunks found. Exit.")
+            return
 
-    # Загрузка в Qdrant
-    await batch_upsert(qdrant, points, batch_size=BATCH_SIZE)
-    await embedding_client.close()
-    await qdrant.close()
+        # Инициализируем клиент эмбеддингов и дожидаемся готовности сервиса
+        await wait_for_embedding_service(embedding_client)
 
-    app_logger.info(f"[RAG Indexing] Successfully indexed {len(points)} chunks to Qdrant '{COLLECTION_NAME}'.")
+        # Полная переиндексация: чистая коллекция без «хвостов» от прошлого корпуса
+        await reset_collection(qdrant)
+
+        # Эмбеддинг и загрузка батчами
+        points: List[PointStruct] = []
+        idx = 0
+
+        for i in range(0, len(all_chunks), BATCH_SIZE):
+            batch = all_chunks[i : i + BATCH_SIZE]
+            texts = [chunk["content"] for chunk in batch]
+            embeddings = await embedding_client.get_embeddings(
+                texts, task=EMBEDDING_TASK
+            )
+            for chunk, vector in zip(batch, embeddings):
+                payload = {
+                    "title": chunk["title"],
+                    "content": chunk["content"],
+                    "source_file": chunk["source_file"],
+                    "retention": True,
+                }
+                points.append(make_point(idx=idx, vector=vector, payload=payload))
+                idx += 1
+            app_logger.info(f"Embedded batch {i//BATCH_SIZE + 1}/{(len(all_chunks)-1)//BATCH_SIZE + 1}")
+
+        # Загрузка в Qdrant
+        await batch_upsert(qdrant, points, batch_size=BATCH_SIZE)
+
+        app_logger.info(f"[RAG Indexing] Successfully indexed {len(points)} chunks to Qdrant '{COLLECTION_NAME}'.")
+    finally:
+        await embedding_client.close()
+        await qdrant.close()
 
 
 if __name__ == "__main__":

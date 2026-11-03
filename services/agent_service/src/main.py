@@ -18,6 +18,8 @@ from shared.utils.text import sanitize_llm_text
 
 from core.agent import get_root_agent, init_root_agent, shutdown_root_agent
 from core.callbacks import TokenUsageCallback
+from core.rag import close_qdrant
+from embedding_service.src.client import embedding_client
 
 logger = get_logger(name="agent_service.main")
 
@@ -61,6 +63,10 @@ async def lifespan(app: FastAPI):
     logger.info("Agent Service готов к работе")
     yield
     await shutdown_root_agent()
+    # Закрываем фоновые HTTP-соединения RAG-контура (созданы при импорте модулей)
+    await embedding_client.close()
+    await close_qdrant()
+    logger.info("Соединения embedding-сервиса и Qdrant закрыты")
 
 
 app = FastAPI(lifespan=lifespan)
