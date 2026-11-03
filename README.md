@@ -22,8 +22,9 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│ Менеджер  →  Gradio UI (:7860)  →  root_agent (LangGraph)                       │
-│                                         │                                       │
+│ Менеджер  →  Web UI (:3050)  →  agent_service API (:7860)  →  root_agent        │
+│  (frontend_service:             (REST/SSE, LangGraph, checkpointer)             │
+│   статика + прокси /api)                │                                       │
 │                     get_churn_analisys_and_retention (sub-agent)                │
 │                                         │                                       │
 │                                 get_churn_info (tool)                           │
@@ -39,11 +40,12 @@
 
 | Сервис | Порт | Назначение |
 |--------|------|------------|
+| `frontend_service` | 3050 | Веб-интерфейс: чаты + разборы клиентов (статика + прокси /api) |
 | `churn_pred_service` | 3010 | Inference CatBoost + TreeSHAP |
 | `embedding_service` | 3020 | Эмбеддинги для RAG (FRIDA / Giga) |
 | `qdrant` | 3030 | Векторное хранилище политик |
 | `vllm` | 3040 | Локальный LLM (OpenAI-compatible API) |
-| `agent_service` | 7860 | Gradio-чат (запуск локально) |
+| `agent_service` | 7860 | REST/SSE API агента (запуск локально) |
 | `rag_indexing_service` | — | Batch-индексация (Docker profile) |
 | `dev-tools` | — | Скачивание ассетов и снапшотов (Docker profile) |
 
@@ -70,7 +72,8 @@ churn_copilot/
 │       └── feature_engineering.py   # Единый pipeline train ↔ serve
 ├── infra/qdrant/               # Persistence векторной БД
 ├── services/
-│   ├── agent_service/          # LangGraph + Gradio UI
+│   ├── agent_service/          # LangGraph + REST/SSE API
+│   ├── frontend_service/       # Веб-интерфейс: статика + прокси /api
 │   ├── churn_pred_service/     # FastAPI inference
 │   ├── embedding_service/      # FastAPI embeddings
 │   ├── rag_indexing_service/   # One-shot indexer
@@ -131,11 +134,23 @@ docker compose --profile rag_indexing up rag_indexing_service
 ### 3. Запуск фронта с агентом
 
 ```bash
+# Терминал 1 — API агента
 cd services/agent_service
 cp env.example .env
-pip install -r requirements.txt gradio
+pip install -r requirements.txt
 python src/main.py   # → http://localhost:7860
+
+# Терминал 2 — веб-интерфейс
+cd services/frontend_service
+cp env.example .env
+pip install -r requirements.txt
+python src/server.py  # → http://localhost:3050
 ```
+
+Веб-интерфейс: слева переключатель «Чаты / Клиенты». В разделе «Клиенты» —
+выгрузка с рисками: кнопка «Разобрать» прогоняет клиента через агента в нижней
+панели (как терминал в IDE), откуда можно «Продолжить в чате» — агент уже будет
+помнить разбор, менеджер видел его в панели.
 
 ---
 
@@ -263,7 +278,7 @@ GET http://localhost:3010/predict?client_id=42
 | Agent | LangChain 1.0, LangGraph, Tool Calling |
 | LLM | vLLM + Qwen3.6-27B-AWQ; fallback OpenAI |
 | RAG | Qdrant, FRIDA embeddings |
-| API / UI | FastAPI, Gradio, httpx |
+| API / UI | FastAPI, vanilla JS SPA, httpx |
 | Infra | Docker Compose, NVIDIA GPU |
 
 ---
