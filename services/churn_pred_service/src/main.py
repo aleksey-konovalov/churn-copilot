@@ -22,12 +22,19 @@ cat_features: list = get_categorical_features()
 class FeatureImpact(BaseModel):
     feature: str
     feature_value: Union[str, int, float, None]
-    risk_contribution_pct: float 
+    risk_contribution_pct: float
 
 class ChurnResponse(BaseModel):
     client_id: int
     churn_probability: float
     top_reasons: List[FeatureImpact]
+
+class BatchRequest(BaseModel):
+    client_ids: List[int]
+
+class BatchItem(BaseModel):
+    client_id: int
+    churn_probability: float
 
 @app.on_event("startup")
 def load_model_and_data():
@@ -114,3 +121,26 @@ def predict_churn(client_id: int):
         churn_probability=float(round(proba, 4)),
         top_reasons=response_reasons
     )
+
+
+@app.post("/predict_batch", response_model=List[BatchItem])
+def predict_batch(body: BatchRequest):
+    """Вероятности пачкой: один прогон CatBoost по всем строкам (для серверных
+    фильтров рисков в agent_service — без SHAP и построчных вызовов)."""
+    if model is None or df_features is None:
+        raise HTTPException(status_code=503, detail="Модель или данные не загружены")
+
+    n = len(df_features)
+    invalid = sorted({cid for cid in body.client_ids if cid < 0 or cid >= n})
+    if invalid:
+        preview = ", ".join(map(str, invalid[:10]))
+        raise HTTPException(
+            status_code=404,
+            detail=f"Client IDs вне диапазона 0 - {n - 1}: {preview}"
+        )
+
+    proba = model.predict_proba(df_features.iloc[body.client_ids])[:, 1]
+    return [
+        BatchItem(client_id=cid, churn_probability=float(round(p, 4)))
+        for cid, p in zip(body.client_ids, proba)
+    ]

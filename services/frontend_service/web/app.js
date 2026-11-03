@@ -170,9 +170,11 @@ const state = {
   clientsTotal: 0,
   clientsLoaded: false,
   clientsLoading: false,
+  clientsError: null,       // сообщение последней ошибки /api/clients
+  riskCounts: null,         // {all, high, mid, low, unknown} — глобальные счётчики с сервера
   clientsPage: 0,           // текущая страница пагинатора (смещение = page * PAGE_SIZE)
   clientsQuery: "",         // поиск по фамилии/ID (серверный, q в /api/clients)
-  clientsFilter: "all",     // all | high | mid | low
+  clientsFilter: "all",     // all | high | mid | low (серверный фильтр, risk в /api/clients)
   activeRow: null,
   analyses: new Map(),      // client_id (string) -> analysis
   panelOpen: false,         // правая панель: анализ оттока / карточка клиента
@@ -288,18 +290,25 @@ function groupThreads(threads) {
   return html;
 }
 
+// Пороги бакетов живут на сервере (RISK_BUCKETS в agent_service/src/api.py):
+// фильтр и счётчики считает /api/clients глобально по всей выгрузке
 const FILTERS = [
   { key: "all", label: "Все клиенты" },
-  { key: "high", label: "Высокий риск", match: (p) => typeof p === "number" && p >= 0.6 },
-  { key: "mid", label: "Средний риск", match: (p) => typeof p === "number" && p >= 0.4 && p < 0.6 },
-  { key: "low", label: "Низкий риск", match: (p) => typeof p === "number" && p < 0.4 },
+  { key: "high", label: "Высокий риск" },
+  { key: "mid", label: "Средний риск" },
+  { key: "low", label: "Низкий риск" },
 ];
 
 function clientFiltersHtml() {
-  const counts = { all: state.clients.length };
-  for (const f of FILTERS.slice(1)) {
-    counts[f.key] = state.clients.filter((c) => f.match(c.churn_probability)).length;
-  }
+  // Счётчики от сервера — по всем клиентам выборки; пока риски не посчитаны
+  // (predict-сервис недоступен) — показываем без цифр вместо страничных
+  const c = state.riskCounts;
+  const counts = {
+    all: c ? c.all : (state.clientsTotal || ""),
+    high: c ? c.high : "",
+    mid: c ? c.mid : "",
+    low: c ? c.low : "",
+  };
   // Структура как у чатов: .item-обёртка + .item-main (после перестройки списка чатов стили живут на item-main)
   return `
     <div class="group">Фильтры по рискам</div>
@@ -307,7 +316,7 @@ function clientFiltersHtml() {
       <div class="item ${state.clientsFilter === f.key ? "active" : ""}">
         <button type="button" class="item-main" data-filter="${f.key}">
           <span class="item-title">${f.label}</span>
-          <span class="item-time">${counts[f.key] ?? 0}</span>
+          <span class="item-time">${counts[f.key]}</span>
         </button>
       </div>`).join("")}`;
 }
@@ -569,15 +578,21 @@ async function loadClients() {
   renderClientsMeta();
   try {
     const q = state.clientsQuery ? `&q=${encodeURIComponent(state.clientsQuery)}` : "";
-    const resp = await api(`/api/clients?limit=${PAGE_SIZE}&offset=${state.clientsPage * PAGE_SIZE}${q}`);
+    const risk = state.clientsFilter !== "all" ? `&risk=${state.clientsFilter}` : "";
+    const resp = await api(`/api/clients?limit=${PAGE_SIZE}&offset=${state.clientsPage * PAGE_SIZE}${q}${risk}`);
     const data = await resp.json();
     state.clients = data.clients || [];
     state.clientsTotal = data.total || 0;
+    state.riskCounts = data.risk_counts || null;
     state.clientsLoaded = true;
+    state.clientsError = null;
   } catch (e) {
     console.warn("Не удалось загрузить клиентов:", e.message);
     state.clients = [];
+    state.clientsTotal = 0;
+    state.riskCounts = null;
     state.clientsLoaded = true;
+    state.clientsError = e.message;
   } finally {
     state.clientsLoading = false;
     renderClientsMeta();
@@ -638,11 +653,13 @@ function renderClientsMeta() {
   if (meta) {
     meta.textContent = state.clientsLoading
       ? "загрузка…"
-      : state.clientsLoaded
-        ? state.clientsQuery
-          ? `найдено: ${state.clients.length} из ${state.clientsTotal}`
-          : `${state.clients.length} из ${state.clientsTotal} · риски из churn_pred_service`
-        : "";
+      : state.clientsError
+        ? "ошибка загрузки"
+        : state.clientsLoaded
+          ? state.clientsQuery
+            ? `найдено: ${state.clients.length} из ${state.clientsTotal}`
+            : `${state.clients.length} из ${state.clientsTotal} · риски из churn_pred_service`
+          : "";
   }
 }
 
@@ -688,29 +705,25 @@ function renderClientsView() {
 }
 
 function riskClass(p) {
+  // Пороги бакетов для раскраски бейджа — синхронизированы с RISK_BUCKETS в api.py
   if (typeof p !== "number") return "";
   if (p >= 0.6) return "high";
   if (p >= 0.4) return "mid";
   return "low";
 }
 
-function visibleClients() {
-  const f = FILTERS.find((x) => x.key === state.clientsFilter);
-  if (!f || !f.match) return state.clients;
-  return state.clients.filter((c) => f.match(c.churn_probability));
-}
-
 function renderClientsTable() {
   const body = $("#cl-body");
   if (!body) return;
-  const rows = visibleClients();
+  // Фильтр по риску применяет сервер (параметр risk в /api/clients)
+  const rows = state.clients;
   if (!rows.length) {
-    const empty = state.clientsLoading
-      ? "Загрузка…"
-      : state.clientsQuery
-        ? "Ничего не найдено"
-        : "Нет клиентов в этом списке";
-    body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-3)">${empty}</td></tr>`;
+    let empty;
+    if (state.clientsError) empty = `Не удалось загрузить клиентов: ${state.clientsError}`;
+    else if (state.clientsLoading) empty = "Загрузка…";
+    else if (state.clientsQuery || state.clientsFilter !== "all") empty = "Ничего не найдено";
+    else empty = "Нет клиентов в этом списке";
+    body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-3)">${esc(empty)}</td></tr>`;
     return;
   }
   body.innerHTML = rows.map((c) => `
@@ -971,8 +984,9 @@ document.addEventListener("click", async (e) => {
   }
   if (target.dataset.filter) {
     state.clientsFilter = target.dataset.filter;
+    state.clientsPage = 0; // фильтр меняет выборку — с первой страницы
     renderSidebar();
-    renderClientsTable();
+    if (state.view === "clients") loadClients();
     return;
   }
   if (target.dataset.analyze !== undefined) {

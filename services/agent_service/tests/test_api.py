@@ -223,6 +223,49 @@ def test_clients_limit_bounds(client, clients_store):
     assert len(resp.json()["clients"]) == 1  # limit 0 -> приведён к 1
 
 
+# ---------- серверный фильтр по риску (карта рисков в кэше процесса) ----------
+
+def test_risk_bucket_helpers():
+    from api import _bucket_of, _risk_counts
+
+    assert _bucket_of(0.9) == "high"
+    assert _bucket_of(0.6) == "high"      # граница входит в высокий
+    assert _bucket_of(0.59) == "mid"
+    assert _bucket_of(0.4) == "mid"
+    assert _bucket_of(0.39) == "low"
+    assert _bucket_of(None) is None
+    assert _bucket_of("0.9") is None
+
+    assert _risk_counts({0: 0.9, 1: None}, 3) == {
+        "all": 3, "high": 1, "mid": 0, "low": 0, "unknown": 2,
+    }
+
+
+def test_clients_risk_filter_server_side(client, clients_store):
+    """Фильтр по риску и счётчики считает сервер глобально (по кэшированной карте)."""
+    from clients_store import stored_fingerprint
+
+    # predict-сервис в тестах недоступен — риски впрыскиваем в кэш напрямую
+    api._risks_cache["fingerprint"] = asyncio.run(stored_fingerprint())
+    api._risks_cache["risks"] = {0: 0.9, 1: 0.5}
+
+    data = client.get("/api/clients", params={"risk": "high"}).json()
+    assert data["total"] == 1
+    assert [c["surname"] for c in data["clients"]] == ["Ivanov"]
+    assert data["clients"][0]["churn_probability"] == 0.9
+    assert data["risk_counts"] == {"all": 2, "high": 1, "mid": 1, "low": 0, "unknown": 0}
+
+    empty = client.get("/api/clients", params={"risk": "low"}).json()
+    assert empty["total"] == 0 and empty["clients"] == []
+
+    # фильтр + поиск применяются вместе
+    both = client.get("/api/clients", params={"risk": "high", "q": "Petrova"}).json()
+    assert both["total"] == 0
+
+    bad = client.get("/api/clients", params={"risk": "bogus"})
+    assert bad.status_code == 400
+
+
 # ---------- удаление чатов (thread_meta; агент не нужен) ----------
 
 @pytest.fixture()

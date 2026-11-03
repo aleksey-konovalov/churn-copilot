@@ -223,6 +223,15 @@ async def count_clients(search: str | None = None) -> int:
     return (await cur.fetchone())[0]
 
 
+async def stored_fingerprint() -> tuple[str, str, str] | None:
+    """(path, mtime_ns, size) выгрузки из meta; None, если данных ещё нет.
+
+    Публичный аксессор для инвалидации внешних кэшей, зависящих от выгрузки
+    (карта рисков в api.py).
+    """
+    return await _stored_fingerprint()
+
+
 async def fetch_clients(limit: int, offset: int, search: str | None = None) -> list[dict]:
     """Страница клиентов, отсортированная по client_id (опционально поиск по фамилии/ID)."""
     conn = _require_conn()
