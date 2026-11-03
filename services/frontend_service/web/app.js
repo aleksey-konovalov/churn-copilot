@@ -1,4 +1,4 @@
-/* Churn Copilot SPA: чаты + разборы клиентов с нижней панелью. Без сборки и зависимостей. */
+/* Churn Copilot SPA: чаты + клиенты с правой панелью (анализ оттока / карточка). Без сборки и зависимостей. */
 "use strict";
 
 /* ---------- утилиты ---------- */
@@ -52,8 +52,9 @@ const state = {
   clientsFilter: "all",     // all | high | mid | low
   activeRow: null,
   analyses: new Map(),      // client_id (string) -> analysis
-  drawerOpen: false,
-  drawerActive: null,
+  panelOpen: false,         // правая панель: анализ оттока / карточка клиента
+  panelClientId: null,      // какой клиент открыт в панели
+  panelTab: "razbor",       // razbor | card
 };
 
 function newAnalysis(client) {
@@ -182,15 +183,15 @@ function clientFiltersHtml() {
 /* ---------- маршрутизация ---------- */
 
 function route() {
-  const hash = location.hash || "#/chats";
+  const hash = location.hash || "#/clients";
   // Во время стрима не перерисовываем: ссылки на DOM-узлы ответа потеряются
   if (state.sending) return;
   if (hash.startsWith("#/c/")) {
     openThread(decodeURIComponent(hash.slice(4)));
-  } else if (hash === "#/clients") {
-    showView("clients");
-  } else {
+  } else if (hash === "#/chats") {
     showView("chats");
+  } else {
+    showView("clients");
   }
 }
 
@@ -201,8 +202,7 @@ function showView(view) {
     renderClientsView();
     renderSidebar();
   } else {
-    $("#card").hidden = true;
-    state.drawerOpen = false;
+    closePanel();
     renderChatView();
     renderSidebar();
   }
@@ -211,8 +211,7 @@ function showView(view) {
 async function openThread(threadId) {
   if (state.view !== "chats" || state.threadId !== threadId) {
     state.view = "chats";
-    state.drawerOpen = false;
-    $("#card").hidden = true;
+    closePanel();
   }
   state.threadId = threadId;
   renderSeg();
@@ -310,7 +309,7 @@ function renderMessages() {
     stream.innerHTML = `
       <div class="welcome">
         <h2>Чем помочь?</h2>
-        <p>Спросите про риск оттока конкретного клиента или откройте раздел «Клиенты» — там можно разобрать клиента одной кнопкой.</p>
+        <p>Спросите про риск оттока конкретного клиента или откройте раздел «Клиенты» — там можно запустить анализ оттока одной кнопкой.</p>
         <div class="hint">
           <button type="button" data-goto="#/clients">Открыть список клиентов</button>
         </div>
@@ -526,13 +525,7 @@ function renderClientsView() {
         <tbody id="cl-body"></tbody>
       </table>
     </div>
-    <div class="cl-pager" id="cl-pager" hidden></div>
-    <div class="drawer hidden" id="drawer">
-      <div class="drawer-handle"></div>
-      <div class="drawer-tabs" id="drawer-tabs"></div>
-      <div class="drawer-body" id="drawer-body"></div>
-      <div class="drawer-status" id="drawer-status">copilot ›</div>
-    </div>`;
+    <div class="cl-pager" id="cl-pager" hidden></div>`;
 
   // Серверный поиск по фамилии/ID: дебаунс, чтобы не дёргать API на каждый символ
   const search = $("#cl-search");
@@ -555,7 +548,6 @@ function renderClientsView() {
   renderClientsTable();
   renderClientsPager();
   if (!state.clientsLoaded && !state.clientsLoading) loadClients();
-  renderDrawer();
 }
 
 function riskClass(p) {
@@ -591,11 +583,11 @@ function renderClientsTable() {
       <td class="tabnum">${c.age ?? "—"}</td>
       <td class="tabnum">${fmtMoney(c.balance)}</td>
       <td><span class="risk-badge ${riskClass(c.churn_probability)} tabnum">${fmtRisk(c.churn_probability)}</span></td>
-      <td class="td-act"><button class="rowbtn" type="button" data-analyze="${c.client_id}">Разобрать</button></td>
+      <td class="td-act"><button class="rowbtn" type="button" data-analyze="${c.client_id}">Анализ оттока</button></td>
     </tr>`).join("");
 }
 
-/* ---------- разбор клиента (нижняя панель) ---------- */
+/* ---------- анализ оттока (правая панель) ---------- */
 
 function openAnalysis(client, clientRow) {
   const key = String(client);
@@ -605,12 +597,12 @@ function openAnalysis(client, clientRow) {
     state.analyses.set(key, analysis);
     streamAnalysis(analysis);
   }
-  state.drawerOpen = true;
-  state.drawerActive = key;
+  state.panelOpen = true;
+  state.panelClientId = key;
+  state.panelTab = "razbor";
   state.activeRow = Number(client);
-  $("#drawer").classList.remove("hidden");
   renderClientsTable();
-  renderDrawer();
+  renderPanel();
 }
 
 function streamAnalysis(analysis) {
@@ -625,90 +617,118 @@ function streamAnalysis(analysis) {
       analysis.status = "error";
       analysis.text += (analysis.text ? "\n\n" : "") + `Ошибка: ${ev.message}`;
     }
-    if (state.drawerActive === analysis.clientId) renderDrawer();
+    if (state.panelClientId === analysis.clientId) renderPanel();
   }, analysis.controller.signal).catch((e) => {
     if (e.name === "AbortError") return;
     analysis.status = "error";
     analysis.text += (analysis.text ? "\n\n" : "") + `Ошибка: ${e.message}`;
-    if (state.drawerActive === analysis.clientId) renderDrawer();
+    if (state.panelClientId === analysis.clientId) renderPanel();
   });
 }
 
-function drawerStatusText(a) {
+function panelStatusText(a) {
   if (!a) return "copilot ›";
-  if (a.status === "done") return `copilot › №${a.clientId} · готово`;
-  if (a.status === "error") return `copilot › №${a.clientId} · ошибка`;
-  if (a.data && a.data.reasons && a.data.reasons.length) return `copilot › №${a.clientId} · риски получены, генерирую разбор…`;
-  return `copilot › №${a.clientId} · вызываю инструменты…`;
+  if (a.status === "done") return "copilot › анализ оттока · готово";
+  if (a.status === "error") return "copilot › анализ оттока · ошибка";
+  if (a.data && a.data.reasons && a.data.reasons.length) return "copilot › анализ оттока · риски получены, генерирую текст…";
+  return "copilot › анализ оттока · вызываю инструменты…";
 }
 
-function miniFactorsHtml(a) {
-  const reasons = (a.data && a.data.reasons) || [];
-  return reasons.slice(0, 3).map((r) => `
-    <div class="mini-f">
-      <div class="mf-top"><span>${esc(r.label)}${r.value ? ` · ${esc(r.value)}` : ""}</span><b class="tabnum">${r.pct}%</b></div>
-      <div class="mini-bar"><div class="mini-fill" style="width:${Math.min(100, r.pct)}%"></div></div>
-    </div>`).join("");
+/* Каркас панели — статичный в index.html, сюда перерисовываются вкладки. */
+function renderPanel() {
+  const panel = $("#client-panel");
+  if (!panel) return;
+  panel.hidden = !state.panelOpen;
+  if (!state.panelOpen) return;
+  const a = state.analyses.get(state.panelClientId);
+
+  $("#cp-id").textContent = `#${a ? a.clientId : state.panelClientId ?? "—"}`;
+  $("#cp-name").textContent = a ? a.surname : "";
+
+  const razborActive = state.panelTab === "razbor";
+  $("#cp-tab-razbor").classList.toggle("active", razborActive);
+  $("#cp-tab-razbor").setAttribute("aria-selected", String(razborActive));
+  $("#cp-tab-card").classList.toggle("active", !razborActive);
+  $("#cp-tab-card").setAttribute("aria-selected", String(!razborActive));
+  $("#cp-pane-razbor").hidden = !razborActive;
+  $("#cp-pane-card").hidden = razborActive;
+
+  const cta = $("#panel-continue");
+  cta.hidden = !razborActive;
+  cta.disabled = !(a && a.status === "done" && a.text);
+
+  if (!a) return;
+  if (razborActive) renderPanelRazbor(a);
+  else renderPanelCard(a);
 }
 
-function renderDrawer() {
-  const drawer = $("#drawer");
-  if (!drawer) return;
-  drawer.classList.toggle("hidden", !state.drawerOpen);
-  const tabs = $("#drawer-tabs");
-  const body = $("#drawer-body");
-  const status = $("#drawer-status");
-  if (!state.drawerOpen) return;
-
-  tabs.innerHTML = `${icon("term")}${[...state.analyses.values()].map((a) => `
-    <div class="dtab ${state.drawerActive === a.clientId ? "active" : ""}" data-tab="${a.clientId}" role="tab" aria-selected="${state.drawerActive === a.clientId}">
-      №${a.clientId} · ${a.data && typeof a.data.churn_probability === "number" ? a.data.churn_probability.toFixed(2) : "…"}
-      <button type="button" class="closer" data-close="${a.clientId}" aria-label="Закрыть разбор">${icon("x")}</button>
-    </div>`).join("")}
-    <span class="dtab-note">результат одного клика — чат не обязателен</span>`;
-
-  const a = state.analyses.get(state.drawerActive);
-  if (!a) {
-    body.innerHTML = '<div class="placeholder" style="color:var(--ink-3);font-size:12.5px">Выберите клиента и нажмите «Разобрать»</div>';
-    status.textContent = "copilot ›";
-    return;
-  }
-
-  const riskLabel = a.data && typeof a.data.churn_probability === "number"
-    ? (a.data.churn_probability >= 0.6 ? "высокий риск" : a.data.churn_probability >= 0.4 ? "средний риск" : "низкий риск")
-    : "…";
-  body.innerHTML = `
-    <div class="drawer-pane">
-      <div class="dp-risk">
-        <div class="dp-big tabnum">${fmtRisk(a.data && a.data.churn_probability)}</div>
-        <div class="dp-lab">${riskLabel}</div>
-        ${miniFactorsHtml(a)}
-      </div>
-      <div class="dp-text">
-        <div class="dp-lab">Разбор агента</div>
-        <div class="text">${a.text ? esc(a.text) : '<span style="color:var(--ink-3)">Запускаю агента…</span>'}</div>
-      </div>
-      <div class="dp-actions">
-        <button class="abtn primary" type="button" data-act="continue" ${a.status === "done" && a.text ? "" : "disabled"}>Продолжить в чате${icon("right")}</button>
-        <button class="abtn" type="button" data-act="card" ${a.data ? "" : "disabled"}>Открыть карточку</button>
-        <button class="abtn" type="button" data-act="close">Закрыть</button>
-      </div>
+function renderPanelRazbor(a) {
+  const prob = a.data ? a.data.churn_probability : null;
+  const note = prob == null
+    ? (a.data ? "прогноз недоступен" : "получаю прогноз…")
+    : `${(prob * 100).toFixed(1)}% · порог модели 0.50`;
+  $("#cp-pane-razbor").innerHTML = `
+    <div class="cp-risk">
+      <div class="cp-risk-top"><span>Вероятность оттока</span><b class="tabnum">${fmtRisk(prob)}</b></div>
+      <div class="cp-track"><div class="cp-fill" style="width:${typeof prob === "number" ? Math.round(prob * 100) : 0}%"></div></div>
+      <small>${esc(note)}</small>
+    </div>
+    <div class="cp-sub">Факторы риска (SHAP)</div>
+    ${(a.data && a.data.reasons || []).map((r) => `
+      <div class="cp-factor">
+        <div class="cp-f-top"><span>${esc(r.label)}${r.value ? ` · ${esc(r.value)}` : ""}</span><b class="tabnum">${r.pct}%</b></div>
+        <div class="cp-f-track"><div class="cp-f-fill" style="width:${Math.min(100, r.pct)}%"></div></div>
+      </div>`).join("") || '<div class="cp-empty">Нет данных от prediction-сервиса</div>'}
+    <div class="cp-agent">
+      <div class="cp-agent-label">${esc(panelStatusText(a))}</div>
+      <div class="cp-agent-text">${a.text ? esc(a.text) : '<span style="color:var(--ink-3)">Запускаю агента…</span>'}</div>
     </div>`;
-  status.textContent = drawerStatusText(a);
-  const continueBtn = body.querySelector('[data-act="continue"]');
-  if (continueBtn) continueBtn.addEventListener("click", () => continueInChat(a));
 }
 
-function closeAnalysis(key) {
-  const a = state.analyses.get(key);
-  if (a) a.controller.abort();
-  state.analyses.delete(key);
-  if (state.drawerActive === key) {
-    state.drawerActive = state.analyses.keys().next().value || null;
+function renderPanelCard(a) {
+  const c = a.client || {};
+  const prob = a.data ? a.data.churn_probability : null;
+  const riskText = typeof prob === "number"
+    ? `${prob.toFixed(2)} · ${prob >= 0.6 ? "высокий" : prob >= 0.4 ? "средний" : "низкий"}`
+    : "—";
+  $("#cp-pane-card").innerHTML = `
+    <div class="cp-riskline"><span>Вероятность оттока</span><b class="tabnum">${esc(riskText)}</b></div>
+    <div class="cp-sub">Атрибуты</div>
+    <dl class="cp-facts">
+      <div><dt>Фамилия</dt><dd>${esc(c.surname ?? "—")}</dd></div>
+      <div><dt>Страна</dt><dd>${esc(c.geography ?? "—")}</dd></div>
+      <div><dt>Возраст</dt><dd class="tabnum">${c.age ?? "—"}</dd></div>
+      <div><dt>Стаж, лет</dt><dd class="tabnum">${c.tenure ?? "—"}</dd></div>
+      <div><dt>Баланс</dt><dd class="tabnum">${fmtMoney(c.balance)}</dd></div>
+      <div><dt>Зарплата (оценка)</dt><dd class="tabnum">${fmtMoney(c.estimated_salary)}</dd></div>
+      <div><dt>Продукты</dt><dd class="tabnum">${c.num_of_products ?? "—"}</dd></div>
+      <div><dt>Кредитный рейтинг</dt><dd class="tabnum">${c.credit_score ?? "—"}</dd></div>
+      <div><dt>Кредитная карта</dt><dd>${c.has_cr_card ? "Да" : "Нет"}</dd></div>
+      <div><dt>Актив. участник</dt><dd>${c.is_active_member ? "Да" : "Нет"}</dd></div>
+    </dl>`;
+}
+
+async function setPanelTab(tab) {
+  state.panelTab = tab;
+  if (tab === "card") {
+    // Карточка показывает свежие данные клиента, а не снапшот на момент анализа
+    const a = state.analyses.get(state.panelClientId);
+    if (a) {
+      const fresh = await fetchClient(Number(a.clientId));
+      if (fresh) {
+        a.client = fresh;
+        a.surname = fresh.surname;
+        const index = state.clients.findIndex((c) => c.client_id === fresh.client_id);
+        if (index >= 0) state.clients[index] = fresh;
+      }
+    }
   }
-  if (!state.analyses.size) state.drawerOpen = false;
-  renderClientsTable();
-  renderDrawer();
+  renderPanel();
+}
+
+function closePanel() {
+  state.panelOpen = false;
+  renderPanel();
 }
 
 async function continueInChat(a) {
@@ -717,72 +737,25 @@ async function continueInChat(a) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: `Разбор №${a.clientId}`,
+        title: `Анализ оттока №${a.clientId}`,
         analysis_text: a.text,
         client_id: a.clientId,
       }),
     });
     const data = await resp.json();
     await loadThreads();
-    $("#card").hidden = true;
+    state.panelOpen = false;
     location.hash = `#/c/${encodeURIComponent(data.thread_id)}`;
   } catch (e) {
     console.warn("Не удалось создать чат:", e.message);
-    const status = $("#drawer-status");
-    if (status) status.textContent = `copilot › ошибка: ${e.message}`;
+    const label = $("#cp-agent-label");
+    if (label) label.textContent = `copilot › ошибка: ${e.message}`;
   }
-}
-
-/* ---------- карточка клиента ---------- */
-
-function renderCard(a) {
-  const card = $("#card");
-  const c = a.client || {};
-  const prob = a.data ? a.data.churn_probability : null;
-  card.innerHTML = `
-    <div class="detail-head">
-      <span class="cid-head">Карточка клиента <code>#${a.clientId}</code></span>
-      <button class="detail-close" type="button" aria-label="Закрыть карточку">${icon("x")}</button>
-    </div>
-    <div class="risk-block">
-      <div class="risk-top"><span class="risk-label">Вероятность оттока</span><span class="risk-value tabnum">${fmtRisk(prob)}</span></div>
-      <div class="risk-track"><div class="risk-fill" style="width:${typeof prob === "number" ? Math.round(prob * 100) : 0}%"></div></div>
-      <div class="risk-note">${prob == null ? "прогноз недоступен" : `${(prob * 100).toFixed(1)}% · порог модели 0.50`}</div>
-    </div>
-    <dl class="facts">
-      <div><dt>Фамилия</dt><dd>${esc(c.surname ?? "—")}</dd></div>
-      <div><dt>Страна</dt><dd>${esc(c.geography ?? "—")}</dd></div>
-      <div><dt>Возраст</dt><dd class="tabnum">${c.age ?? "—"}</dd></div>
-      <div><dt>Стаж, лет</dt><dd class="tabnum">${c.tenure ?? "—"}</dd></div>
-      <div><dt>Баланс</dt><dd class="tabnum">${fmtMoney(c.balance)}</dd></div>
-      <div><dt>Зарплата (оценка)</dt><dd class="tabnum">${fmtMoney(c.estimated_salary)}</dd></div>
-      <div><dt>Продукты</dt><dd class="tabnum">${c.num_of_products ?? "—"}</dd></div>
-      <div><dt>Активный участник</dt><dd>${c.is_active_member ? "Да" : "Нет"}</dd></div>
-    </dl>
-    <div class="detail-sub">Факторы риска (SHAP)</div>
-    ${(a.data && a.data.reasons || []).map((r) => `
-      <div class="factor">
-        <div class="f-top"><span>${esc(r.label)}${r.value ? ` · ${esc(r.value)}` : ""}</span><span class="f-value tabnum">${r.pct}%</span></div>
-        <div class="f-track"><div class="f-fill" style="width:${Math.min(100, r.pct)}%"></div></div>
-      </div>`).join("") || '<div style="font-size:12px;color:var(--ink-3)">Нет данных от prediction-сервиса</div>'}
-    <div class="dc-actions">
-      <button class="abtn primary" type="button" data-act="continue" ${a.status === "done" && a.text ? "" : "disabled"}>Продолжить в чате${icon("right")}</button>
-    </div>`;
-  card.hidden = false;
-  card.querySelector(".detail-close").addEventListener("click", () => { card.hidden = true; });
-  card.querySelector('[data-act="continue"]').addEventListener("click", () => continueInChat(a));
 }
 
 /* ---------- обработчики ---------- */
 
 document.addEventListener("click", async (e) => {
-  // Кнопка-крестик на вкладке панели — раньше переключения вкладок
-  const closeBtn = e.target.closest("[data-close]");
-  if (closeBtn) {
-    closeAnalysis(closeBtn.dataset.close);
-    return;
-  }
-
   const target = e.target.closest("button");
   if (!target) return;
 
@@ -790,7 +763,7 @@ document.addEventListener("click", async (e) => {
     if (state.sending) return;
     state.threadId = null;
     state.messages = [];
-    if (location.hash === "#/chats" || location.hash === "") {
+    if (location.hash === "#/chats") {
       showView("chats"); // hash не меняется — перерисовываем вручную
     } else {
       location.hash = "#/chats";
@@ -799,6 +772,19 @@ document.addEventListener("click", async (e) => {
   }
   if (target.closest("#seg")) {
     location.hash = target.dataset.view === "clients" ? "#/clients" : "#/chats";
+    return;
+  }
+  if (target.closest("#panel-close")) {
+    closePanel();
+    return;
+  }
+  if (target.closest("#panel-continue")) {
+    const a = state.analyses.get(state.panelClientId);
+    if (a && !target.disabled) continueInChat(a);
+    return;
+  }
+  if (target.dataset.panelTab) {
+    setPanelTab(target.dataset.panelTab);
     return;
   }
   if (target.dataset.thread) {
@@ -819,31 +805,6 @@ document.addEventListener("click", async (e) => {
     openAnalysis(clientId, row || undefined);
     return;
   }
-  const tab = target.closest("[data-tab]");
-  if (tab) {
-    state.drawerActive = tab.dataset.tab;
-    renderDrawer();
-    return;
-  }
-  if (target.dataset.act === "close") {
-    state.drawerOpen = false;
-    renderDrawer();
-    return;
-  }
-  if (target.dataset.act === "card") {
-    const a = state.analyses.get(state.drawerActive);
-    if (!a) return;
-    // Карточка показывает свежие данные клиента, а не снапшот на момент разбора
-    const fresh = await fetchClient(Number(a.clientId));
-    if (fresh) {
-      a.client = fresh;
-      a.surname = fresh.surname;
-      const index = state.clients.findIndex((c) => c.client_id === fresh.client_id);
-      if (index >= 0) state.clients[index] = fresh;
-    }
-    renderCard(a);
-  }
-  /* «Продолжить в чате» слушается точечно в renderDrawer/renderCard */
 });
 
 window.addEventListener("hashchange", route);
