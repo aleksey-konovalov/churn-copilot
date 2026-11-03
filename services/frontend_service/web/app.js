@@ -158,9 +158,9 @@ function groupThreads(threads) {
 
 const FILTERS = [
   { key: "all", label: "Все клиенты" },
-  { key: "high", label: "Высокий риск", match: (p) => p >= 0.6 },
-  { key: "mid", label: "Средний риск", match: (p) => p >= 0.4 && p < 0.6 },
-  { key: "low", label: "Низкий риск", match: (p) => p < 0.4 },
+  { key: "high", label: "Высокий риск", match: (p) => typeof p === "number" && p >= 0.6 },
+  { key: "mid", label: "Средний риск", match: (p) => typeof p === "number" && p >= 0.4 && p < 0.6 },
+  { key: "low", label: "Низкий риск", match: (p) => typeof p === "number" && p < 0.4 },
 ];
 
 function clientFiltersHtml() {
@@ -206,7 +206,7 @@ function showView(view) {
   }
 }
 
-function openThread(threadId) {
+async function openThread(threadId) {
   if (state.view !== "chats" || state.threadId !== threadId) {
     state.view = "chats";
     state.drawerOpen = false;
@@ -216,6 +216,10 @@ function openThread(threadId) {
   renderSeg();
   renderChatView(true);
   renderSidebar();
+  // Тред может отсутствовать в загруженном списке (переход по ссылке на свежий seed) — подтягиваем
+  if (!state.threads.some((t) => t.thread_id === threadId)) {
+    await loadThreads();
+  }
 }
 
 /* ---------- чат ---------- */
@@ -230,10 +234,20 @@ async function loadThreads() {
     const resp = await api("/api/threads");
     const data = await resp.json();
     state.threads = data.threads || [];
-    if (state.view === "chats") renderSidebar();
+    if (state.view === "chats") {
+      renderSidebar();
+      updateCrumb();
+    }
   } catch (e) {
     console.warn("Не удалось загрузить диалоги:", e.message);
   }
+}
+
+function updateCrumb() {
+  const crumb = document.querySelector("#main .crumb");
+  if (!crumb || !state.threadId) return;
+  const thread = state.threads.find((x) => x.thread_id === state.threadId);
+  if (thread) crumb.textContent = thread.title;
 }
 
 function renderChatView(withHistory = false) {
