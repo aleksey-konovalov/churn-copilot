@@ -1,5 +1,7 @@
 import os
 import sys
+from contextlib import asynccontextmanager
+
 import pandas as pd
 from typing import List, Union
 from fastapi import FastAPI, HTTPException
@@ -12,8 +14,6 @@ if DATA_SCIENCE_SRC not in sys.path:
     sys.path.append(DATA_SCIENCE_SRC)
 
 from feature_engineering import prepare_features, get_categorical_features
-
-app = FastAPI(title="Churn Copilot Prediction Service")
 
 model: CatBoostClassifier = None
 df_features: pd.DataFrame = None
@@ -36,23 +36,32 @@ class BatchItem(BaseModel):
     client_id: int
     churn_probability: float
 
-@app.on_event("startup")
+
 def load_model_and_data():
     global model, df_features
-    
+
     model_path = os.getenv("MODEL_PATH", "/opt/data_science/artifacts/best_model.cbm")
     data_path = os.getenv("DATA_PATH", "/opt/data_science/data/raw/test.csv")
-    
+
     if not os.path.exists(model_path):
         raise RuntimeError(f"Модель не найдена по пути {model_path}.")
     if not os.path.exists(data_path):
         raise RuntimeError(f"Тестовые данные не найдены по пути {data_path}")
-        
+
     model = CatBoostClassifier()
     model.load_model(model_path)
-    
+
     X, _ = prepare_features(data_path, target_col='Exited')
     df_features = X.reset_index(drop=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_model_and_data()
+    yield
+
+
+app = FastAPI(title="Churn Copilot Prediction Service", lifespan=lifespan)
 
 
 @app.get("/predict", response_model=ChurnResponse)
@@ -83,7 +92,9 @@ def predict_churn(client_id: int):
             val = X_row.iloc[0][col_name]
             if hasattr(val, 'item'):
                 val = val.item()
-            elif pd.isna(val):
+            # np.float64.item() оставляет NaN числом: без проверки NaN ушёл бы в
+            # JSON как bare NaN (невалидный JSON, resp.json() на фронте падает)
+            if val is None or pd.isna(val):
                 val = None
                 
             risk_factors.append({

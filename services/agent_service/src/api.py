@@ -19,6 +19,7 @@ REST/SSE API для веб-фронтенда (frontend_service).
 import json
 import os
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -354,8 +355,18 @@ async def _fetch_prediction(client_id: int) -> dict | None:
     return None
 
 
-# Результаты разборов в памяти процесса: повторный клик по клиенту — мгновенно
-_analyze_cache: dict[str, dict] = {}
+# Результаты разборов в памяти процесса: повторный клик по клиенту — мгновенно.
+# LRU с потолком: без лимита кэш рос бы вместе с числом разобранных клиентов
+_ANALYZE_CACHE_MAX = 100
+_analyze_cache: OrderedDict[str, dict] = OrderedDict()
+
+
+def _cache_analysis(client_id: int, value: dict) -> None:
+    key = str(client_id)
+    _analyze_cache[key] = value
+    _analyze_cache.move_to_end(key)
+    while len(_analyze_cache) > _ANALYZE_CACHE_MAX:
+        _analyze_cache.popitem(last=False)
 
 
 async def _replay_analysis(item: dict):
@@ -389,7 +400,7 @@ async def _run_analysis(agent, client_id: int):
     async for event in _stream_agent(agent, prompt, thread_id, text_sink=parts):
         yield event
     if parts:
-        _analyze_cache[str(client_id)] = {"text": sanitize_llm_text("".join(parts)), "data": data}
+        _cache_analysis(client_id, {"text": sanitize_llm_text("".join(parts)), "data": data})
 
 
 @router.post("/analyze")
@@ -400,6 +411,7 @@ async def analyze(body: AnalyzeRequest):
         raise HTTPException(503, "Агент ещё инициализируется, повторите запрос через пару секунд")
     cached = _analyze_cache.get(str(body.client_id))
     if cached:
+        _analyze_cache.move_to_end(str(body.client_id))
         return _sse_response(_replay_analysis(cached))
     return _sse_response(_run_analysis(agent, body.client_id))
 
