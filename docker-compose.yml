@@ -84,8 +84,11 @@ services:
       - SERVICE_NAME=agent_service
       - LOG_TO_FILE=false
       # --- LLM: vLLM в compose-сети (тяжёлый контейнер поднимается отдельно, make up его не включает) ---
+      # Значения по умолчанию можно переопределить в .env корня репозитория без правки compose:
+      # например, LLM_BASE_URL=http://host.docker.internal:3040/v1 — vLLM, развёрнутый на хосте.
       - ACTIVE_LLM_PROFILE=local_qwen_agent
-      - LLM_BASE_URL=http://vllm:8901/v1
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8901/v1}
+      - LLM_MODEL=${LLM_MODEL:-Qwen3.6}
       # --- Зависимости агента в compose-сети ---
       - CHURN_PRED_SERVICE_URL=http://churn_pred_service:3010
       - EMBEDDING_SERVICE_URL=http://embedding_service:3020
@@ -99,6 +102,9 @@ services:
     volumes:
       - ./data_science/data/raw/test.csv:/data/test.csv:ro
       - agent-data:/data
+    # DNS-имя хоста внутри контейнера — для LLM_BASE_URL=http://host.docker.internal:PORT/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - churn_pred_service
       - embedding_service
