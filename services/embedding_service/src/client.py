@@ -19,7 +19,7 @@ class EmbeddingClient:
     async def get_embeddings(
         self, 
         texts: List[str], 
-        task: Literal['search_document', 'search_marker']
+        task: Literal['search_document', 'search_query', 'paraphrase']
     ) -> List[List[float]]:
         """Получение эмбеддингов из сервиса."""
         logger.debug(f"Запрос эмбеддингов для {len(texts)} текстов с task: {task}")

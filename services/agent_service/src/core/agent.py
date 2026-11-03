@@ -53,7 +53,8 @@ churn_analisys_and_retention_agent = create_agent(
     tools=[get_churn_info],
     system_prompt=churn_analisys_and_retention_agent_prompt,
     middleware=_fallback_middleware() + [
-        # Сетевые сбои prediction-сервиса: 2 ретрая, затем ошибка уходит модели текстом
+        # Сетевые сбои тулов (prediction-сервис, embedding, Qdrant) и 5xx: 2 ретрая,
+        # затем ошибка уходит модели текстом
         ToolRetryMiddleware(
             max_retries=2,
             tools=["get_churn_info"],

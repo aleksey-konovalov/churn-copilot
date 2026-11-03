@@ -42,7 +42,7 @@ async def get_churn_info(client_id: str):
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url, params={"client_id": client_id}, timeout=5.0)
-    except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
+    except (httpx.TimeoutException, httpx.ConnectError):
         logger.warning(f"Сетевая ошибка при обращении к prediction-сервису (client_id={client_id})")
         raise
     except Exception:
@@ -60,13 +60,24 @@ async def get_churn_info(client_id: str):
 
         if churn_prob >= CHURN_PROB_TRASHOLD:
             logger.info(f"Высокий риск оттока ({churn_prob}). Формируем RAG запрос...")
-            rag_query = build_complex_query_from_reasons(churn_pred_data)
-            logger.debug(f"Сформирован RAG запрос: {rag_query}")
+            # Вариант запроса на каждую причину оттока: включает голосование в search_qdrant
+            rag_queries = build_complex_query_from_reasons(churn_pred_data)
+            logger.debug(f"Сформированы RAG запросы ({len(rag_queries)} шт.): {rag_queries}")
 
-            policies_context = await search_qdrant([rag_query])
-            logger.debug(f"Получен контекст политик (длина: {len(policies_context)} символов)")
+            # search_qdrant возвращает контекст или None (ничего не найдено);
+            # сетевые сбои пробрасываются — их ретраит ToolRetryMiddleware,
+            # прочие ошибки инфраструктуры превращаем в безопасный ответ модели
+            try:
+                policies_context = await search_qdrant(rag_queries)
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.HTTPStatusError):
+                logger.warning(f"Сетевая ошибка при RAG-поиске политик (client_id={client_id})")
+                raise
+            except Exception:
+                logger.exception(f"Ошибка RAG-поиска политик (client_id={client_id})")
+                return "Ошибка: база знаний политик временно недоступна."
 
-            if "ничего не найдено" not in policies_context.lower():
+            if policies_context:
+                logger.debug(f"Получен контекст политик (длина: {len(policies_context)} символов)")
                 report += f"\n\n--- НАЙДЕННЫЕ КОРПОРАТИВНЫЕ ПОЛИТИКИ И РЕКОМЕНДАЦИИ ПО УДЕРЖАНИЮ ---\n{policies_context}"
             else:
                 logger.warning("RAG ничего не нашел по запросу удержания")
@@ -81,6 +92,11 @@ async def get_churn_info(client_id: str):
         error_detail = response.json().get("detail", "Клиент не найден")
         logger.warning(f"Клиент с ID {client_id} не найден (404)")
         return f"Ошибка: {error_detail}"
+    elif response.is_server_error:
+        # 5xx — временный сбой: HTTPStatusError уйдет в ToolRetryMiddleware на ретрай,
+        # после исчерпания попыток модель получит сообщение об ошибке
+        logger.warning(f"prediction-сервис вернул {response.status_code} — передаем в ретрай")
+        response.raise_for_status()
     else:
         logger.error(f"prediction-сервис вернул статус {response.status_code}")
         return f"Ошибка: prediction-сервис вернул статус {response.status_code}"
