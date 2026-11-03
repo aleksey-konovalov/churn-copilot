@@ -23,13 +23,13 @@ import uuid
 from datetime import datetime, timezone
 
 import aiosqlite
-import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from shared.constants import BINARY_FEATURES, FEATURE_MAP, FEATURE_VALUE_MAPS
+from shared.utils.http import create_async_client
 from shared.utils.logger import get_logger
 from shared.utils.text import sanitize_llm_text
 
@@ -345,8 +345,8 @@ async def _fetch_prediction(client_id: int) -> dict | None:
     """Прогноз напрямую от churn_pred_service — для карточки клиента. None при недоступности."""
     base_url = os.getenv("CHURN_PRED_SERVICE_URL", "http://localhost:3010")
     try:
-        async with httpx.AsyncClient() as http:
-            response = await http.get(f"{base_url}/predict", params={"client_id": client_id}, timeout=5.0)
+        async with create_async_client(timeout=5.0) as http:
+            response = await http.get(f"{base_url}/predict", params={"client_id": client_id})
         if response.status_code == 200:
             return response.json()
         logger.warning(f"prediction-сервис вернул {response.status_code} для клиента {client_id}")

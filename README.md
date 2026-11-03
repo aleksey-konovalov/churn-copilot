@@ -245,7 +245,7 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 
 ### 7. Shared infrastructure
 
-Пакет `shared/` — единый логгер (colorlog, rotation, env-driven level), `FEATURE_MAP` для human-readable отчётов, валидаторы `client_id`.
+Пакет `shared/` — единый логгер (stdout-only по 12-factor, сквозной request_id через `X-Request-ID`, `LOG_FORMAT=json` для сборщиков; ротацию делает docker logging driver), `FEATURE_MAP` для human-readable отчётов, валидаторы `client_id`.
 
 ### 8. Docker / MLOps практики
 

@@ -1,114 +1,120 @@
-import os
-import sys
+"""
+Единая настройка логирования сервисов.
+
+Принцип (12-factor): сервис пишет только в stdout — хранением и ротацией
+занимается docker (logging driver + max-size/max-file в docker-compose.yml),
+сборщики логов подписываются на тот же поток. Файловые хендлеры внутри
+контейнеров не используются: docker logs их не видит, а writable-слой
+контейнера эфемерен.
+
+Каждый сервис вызывает setup_logging() ровно один раз в точке входа; остальной
+код только объявляет именованный логгер через get_logger(__name__ или имя).
+
+ENV:
+  LOG_LEVEL   — уровень root-логгера: имя (DEBUG/INFO/...) или число (по умолчанию INFO);
+  LOG_FORMAT  — console (по умолчанию) | json — машинный формат для сборщиков логов
+                (Loki/ELK и т.п.).
+
+Сквозной request_id: HTTP-middleware сервиса кладёт его в request_id_var
+(см. shared.utils.request_id), ContextFilter добавляет в каждую запись лога.
+Вне HTTP-запроса — "-".
+"""
+
+import json
 import logging
-from logging.handlers import RotatingFileHandler
+import logging.config
+import os
 
-# Безопасный импорт colorlog с фоллбэком
-try:
-    from colorlog import ColoredFormatter
-    _HAS_COLORLOG = True
-except ImportError:
-    _HAS_COLORLOG = False
+from shared.utils.request_id import request_id_var
 
-def get_logger(
-    name: str = "app", 
-    log_level: int = None,
-    log_file: str = None
-) -> logging.Logger:
-    """
-    Создает и настраивает единый логгер.
-    
-    name: Имя логгера (__name__ или имя сервиса)
-    log_level: Уровень логирования (по умолчанию берется из ENV LOG_LEVEL или INFO)
-    log_file: Имя файла для логов (по умолчанию <name>.log)
-    """
-    # Защита от дублирования хендлеров при повторном импорте (важно для микросервисов)
-    logger = logging.getLogger(name)
-    
-    # Если у логгера уже есть хендлеры, ничего не добавляем
-    if logger.handlers:
-        return logger
+__all__ = [
+    "ContextFilter",
+    "JsonFormatter",
+    "get_logger",
+    "request_id_var",
+    "setup_logging",
+]
 
-    # Проверяем родительские логгеры (чтобы дочерние не дублировали вывод)
-    parent = logger.parent
-    while parent is not None:
-        if parent.handlers:
-            # Устанавливаем уровень родителя, но хендлеры не добавляем
-            logger.setLevel(parent.level)
-            return logger
-        parent = parent.parent
-        
-    # Уровень логирования (поддерживает как числа, так и строки тип 'DEBUG')
-    if log_level is not None:
-        level = log_level
-    else:
-        env_level = os.getenv("LOG_LEVEL", "INFO")
-        # Если в env число (например, "20")
-        if env_level.isdigit():
-            level = int(env_level)
-        # Если в env слово (например, "DEBUG")
-        else:
-            level = getattr(logging, env_level.upper(), logging.INFO)
 
-    logger.setLevel(level)
+def get_logger(name: str = "") -> logging.Logger:
+    """Именованный логгер; конфигурацию делает setup_logging() в точке входа."""
+    return logging.getLogger(name)
 
-    # Форматтеры
-    base_formatter = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
-    # Проверяем, выводим ли мы в реальную консоль (TTY) и есть ли colorlog
-    use_colors = _HAS_COLORLOG and sys.stdout.isatty()
-    
-    if use_colors:
-        console_formatter = ColoredFormatter(
-            "%(log_color)s%(levelname)-8s%(reset)s %(asctime)s - %(message)s",
-            datefmt="%H:%M:%S",
-            log_colors={
-                'DEBUG': 'cyan',
-                'INFO': 'green',
-                'WARNING': 'yellow',
-                'ERROR': 'red',
-                'CRITICAL': 'red,bg_white',
-            }
-        )
-    else:
-        # Фоллбэк: обычный форматтер, если colorlog не установлен или это Docker/CI
-        console_formatter = logging.Formatter(
-            "%(levelname)-8s %(asctime)s - %(message)s",
-            datefmt="%H:%M:%S"
-        )
 
-    # Обработчик для консоли
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+class ContextFilter(logging.Filter):
+    """Добавляет в каждую запись имя сервиса и request_id."""
 
-    # Обработчик для файла (зависит от ENV переменной LOG_TO_FILE)
-    log_to_file = os.getenv("LOG_TO_FILE", "false").lower() in ("true", "1", "yes")
-    
-    if log_to_file:
-        log_dir = os.getenv("LOG_DIR", os.path.join(os.getcwd(), "logs"))
-        os.makedirs(log_dir, exist_ok=True)
-        
-        filename = log_file or f"{name.split('.')[-1]}.log"
-        log_path = os.path.join(log_dir, filename)
-        
-        file_handler = RotatingFileHandler(
-            filename=log_path,
-            maxBytes=5*1024*1024,  # 5 MB
-            backupCount=3,
-            encoding='utf-8'
-        )
-        # В файл всегда пишем DEBUG, чтобы не терять полезную инфу
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(base_formatter))
-        logger.addHandler(file_handler)
+    def __init__(self, service: str):
+        super().__init__()
+        self.service = service
 
-    # Для FastAPI/Uvicorn: предотвращает двойное логирование
-    logger.propagate = False
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Присваивание динамических атрибутов mypy разрешает; в JSON-форматере
+        # ниже для чтения нужны ignore
+        record.service = self.service
+        record.request_id = request_id_var.get()
+        return True
 
-    return logger
 
-# Экземпляр логгера по умолчанию для удобного импорта
-app_logger = get_logger(os.getenv("SERVICE_NAME", "app"))
+class JsonFormatter(logging.Formatter):
+    """Минимальный JSON-форматер без внешних зависимостей."""
 
+    def format(self, record: logging.LogRecord) -> str:
+        # service/request_id добавлены ContextFilter'ом, для mypy это не поля LogRecord
+        entry = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "service": record.service,  # type: ignore[attr-defined]
+            "logger": record.name,
+            "request_id": record.request_id,  # type: ignore[attr-defined]
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
+def _level_from_env() -> int:
+    raw = os.getenv("LOG_LEVEL", "INFO")
+    return int(raw) if raw.isdigit() else getattr(logging, raw.upper(), logging.INFO)
+
+
+def setup_logging(service: str) -> None:
+    """Настраивает logging процесса. Вызывать один раз в точке входа сервиса."""
+    level = _level_from_env()
+    use_json = os.getenv("LOG_FORMAT", "console").strip().lower() == "json"
+    formatter = (
+        {"()": JsonFormatter}
+        if use_json
+        else {
+            "format": "%(asctime)s %(levelname)-8s [%(request_id)s] %(name)s - %(message)s",
+            "datefmt": "%H:%M:%S",
+        }
+    )
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            # Логгеры, созданные импортами до этого вызова (disable_existing_loggers
+            # по умолчанию их глушит), остаются рабочими — они всплывают в root
+            "disable_existing_loggers": False,
+            "filters": {"ctx": {"()": ContextFilter, "service": service}},
+            "formatters": {"std": formatter},
+            "handlers": {
+                "out": {
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stdout",
+                    "formatter": "std",
+                    "filters": ["ctx"],
+                },
+            },
+            "root": {"handlers": ["out"], "level": level},
+            # uvicorn по умолчанию ставит своим логгерам отдельные хендлеры с другим
+            # форматом — перецепляем их на общий хендлер, чтобы в docker compose logs
+            # всё выглядело единообразно
+            "loggers": {
+                "uvicorn": {"handlers": ["out"], "level": level, "propagate": False},
+                "uvicorn.error": {"handlers": ["out"], "level": level, "propagate": False},
+                "uvicorn.access": {"handlers": ["out"], "level": level, "propagate": False},
+            },
+        }
+    )

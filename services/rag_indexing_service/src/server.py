@@ -4,7 +4,6 @@ import sys
 import asyncio
 from typing import List, Dict
 
-import sys
 sys.path.insert(0, "/app/embedding_client")
 from client import EmbeddingClient
 
@@ -12,7 +11,10 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import PointStruct
 from qdrant_wrapper import ensure_collection, batch_upsert, make_point
 
-from shared.utils.logger import app_logger, get_logger
+from shared.utils.logger import get_logger, setup_logging
+
+setup_logging(os.getenv("SERVICE_NAME", "rag_indexing_service"))
+logger = get_logger("rag_indexing_service.server")
 
 
 # Конфигурация
@@ -26,10 +28,10 @@ EMBEDDING_TASK = "search_document"
 
 async def wait_for_embedding_service(client: EmbeddingClient, timeout: int = 120):
     """Ждет, пока embedding_service загрузит модель и станет доступен."""
-    app_logger.info("Waiting for embedding service to become ready...")
+    logger.info("Waiting for embedding service to become ready...")
     for _ in range(timeout // 5):
         if await client.health_check():
-            app_logger.info("Embedding service is ready.")
+            logger.info("Embedding service is ready.")
             return
         await asyncio.sleep(5)
     raise RuntimeError("Embedding service did not become ready in time.")
@@ -69,13 +71,13 @@ async def reset_collection(qdrant: AsyncQdrantClient) -> None:
     удаленные из исходных файлов при переиндексации."""
     collections = await qdrant.get_collections()
     if COLLECTION_NAME in [c.name for c in collections.collections]:
-        app_logger.info(f"[Qdrant] Dropping existing collection '{COLLECTION_NAME}' for full reindex")
+        logger.info(f"[Qdrant] Dropping existing collection '{COLLECTION_NAME}' for full reindex")
         await qdrant.delete_collection(COLLECTION_NAME)
     await ensure_collection(qdrant)
 
 
 async def main():
-    app_logger.info(f"Starting RAG indexing from '{RAG_DATA_DIR}'")
+    logger.info(f"Starting RAG indexing from '{RAG_DATA_DIR}'")
 
     if not os.path.isdir(RAG_DATA_DIR):
         raise RuntimeError(f"Directory '{RAG_DATA_DIR}' does not exist.")
@@ -91,12 +93,12 @@ async def main():
                 continue
             filepath = os.path.join(RAG_DATA_DIR, filename)
             chunks = await load_and_chunk_file(filepath, filename)
-            app_logger.info(f"Loaded {len(chunks)} chunks from '{filename}'.")
+            logger.info(f"Loaded {len(chunks)} chunks from '{filename}'.")
             all_chunks.extend(chunks)
 
-        app_logger.info(f"Total chunks to index: {len(all_chunks)}")
+        logger.info(f"Total chunks to index: {len(all_chunks)}")
         if not all_chunks:
-            app_logger.warning("No chunks found. Exit.")
+            logger.warning("No chunks found. Exit.")
             return
 
         # Инициализируем клиент эмбеддингов и дожидаемся готовности сервиса
@@ -124,12 +126,12 @@ async def main():
                 }
                 points.append(make_point(idx=idx, vector=vector, payload=payload))
                 idx += 1
-            app_logger.info(f"Embedded batch {i//BATCH_SIZE + 1}/{(len(all_chunks)-1)//BATCH_SIZE + 1}")
+            logger.info(f"Embedded batch {i//BATCH_SIZE + 1}/{(len(all_chunks)-1)//BATCH_SIZE + 1}")
 
         # Загрузка в Qdrant
         await batch_upsert(qdrant, points, batch_size=BATCH_SIZE)
 
-        app_logger.info(f"[RAG Indexing] Successfully indexed {len(points)} chunks to Qdrant '{COLLECTION_NAME}'.")
+        logger.info(f"[RAG Indexing] Successfully indexed {len(points)} chunks to Qdrant '{COLLECTION_NAME}'.")
     finally:
         await embedding_client.close()
         await qdrant.close()
