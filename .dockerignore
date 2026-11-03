@@ -1,0 +1,23 @@
+# Ускоряет root-context сборки (agent_service, frontend_service, embedding_service,
+# rag_indexing_service): в образы попадает только то, что COPY-ят Dockerfile'ы.
+.git
+.gitignore
+.dockerignore
+.venv
+.zcode
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+# Секреты не печём в образы: compose подставляет env_file с хоста в рантайме
+**/.env
+# Данные и артефакты попадают в контейнеры volume-монтажом, не через образ
+data/
+data_science/
+infra/
+logs/
+*.db
+*.db-shm
+*.db-wal
+*.csv
+*.cbm

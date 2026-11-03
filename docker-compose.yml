@@ -73,6 +73,54 @@ services:
       - ./infra/qdrant/snapshots:/qdrant/snapshots   # Хранение снапшотов
     restart: unless-stopped
 
+  agent_service:
+    build:
+      context: .
+      dockerfile: ./services/agent_service/Dockerfile
+    container_name: agent_service
+    ports:
+      - "7860:7860"
+    environment:
+      - SERVICE_NAME=agent_service
+      - LOG_TO_FILE=false
+      # --- LLM: vLLM в compose-сети (тяжёлый контейнер поднимается отдельно, make up его не включает) ---
+      - ACTIVE_LLM_PROFILE=local_qwen_agent
+      - LLM_BASE_URL=http://vllm:8901/v1
+      # --- Зависимости агента в compose-сети ---
+      - CHURN_PRED_SERVICE_URL=http://churn_pred_service:3010
+      - EMBEDDING_SERVICE_URL=http://embedding_service:3020
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - COLLECTION_NAME=policies
+      # --- Данные: CSV-выгрузка read-only, состояние (checkpointer + БД клиентов) в volume ---
+      - CLIENTS_CSV_PATH=/data/test.csv
+      - CHECKPOINT_DB_PATH=/data/checkpoints.db
+      - CLIENTS_DB_PATH=/data/clients.db
+    volumes:
+      - ./data_science/data/raw/test.csv:/data/test.csv:ro
+      - agent-data:/data
+    depends_on:
+      - churn_pred_service
+      - embedding_service
+      - qdrant
+    restart: unless-stopped
+
+  frontend_service:
+    build:
+      context: .
+      dockerfile: ./services/frontend_service/Dockerfile
+    container_name: frontend_service
+    ports:
+      - "3050:3050"
+    environment:
+      - SERVICE_NAME=frontend_service
+      - LOG_TO_FILE=false
+      - AGENT_SERVICE_URL=http://agent_service:7860
+      - FRONTEND_PORT=3050
+    depends_on:
+      - agent_service
+    restart: unless-stopped
+
   rag_indexing_service:
     profiles: ["rag_indexing"]
     build: 
@@ -114,3 +162,4 @@ services:
 volumes:
   app-cache:
   vllm-models:
+  agent-data:

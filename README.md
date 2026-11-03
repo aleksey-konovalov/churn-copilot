@@ -45,7 +45,7 @@
 | `embedding_service` | 3020 | Эмбеддинги для RAG (FRIDA / Giga) |
 | `qdrant` | 3030 | Векторное хранилище политик |
 | `vllm` | 3040 | Локальный LLM (OpenAI-compatible API) |
-| `agent_service` | 7860 | REST/SSE API агента (запуск локально) |
+| `agent_service` | 7860 | REST/SSE API агента (LangGraph, checkpointer, SQLite-выгрузка клиентов) |
 | `rag_indexing_service` | — | Batch-индексация (Docker profile) |
 | `dev-tools` | — | Скачивание ассетов и снапшотов (Docker profile) |
 
@@ -131,7 +131,29 @@ docker compose --profile rag_indexing up rag_indexing_service
 
 > Убедитесь, что `COLLECTION_NAME` в `.env` агента совпадает с `QDRANT_COLLECTION` в compose (`policies`).
 
-### 3. Запуск фронта с агентом
+### 3. Запуск фронта с агентом (Docker)
+
+```bash
+make up   # поднимает всё, кроме vLLM: churn_pred, embedding, qdrant, agent_service, frontend_service
+```
+
+Веб-интерфейс: **http://localhost:3050**. `agent_service` доступен на `:7860` (REST/SSE API). 
+Состояние агента (checkpointer + БД клиентов) живёт в docker volume `agent-data`, так что чаты 
+и выгрузка переживают `make down` / `make up`. Перезаливка кода в образы — тот же `make up` (--build).
+
+vLLM — самый тяжёлый контейнер (GPU, 27B AWQ). Когда он нужен:
+
+```bash
+docker compose up -d vllm   # агент найдёт его по имени: http://vllm:8901/v1 (LLM_BASE_URL в compose)
+```
+
+Раздел «Клиенты» читает выгрузку из SQLite (CSV `data_science/data/raw/test.csv` перегоняется в БД 
+при старте agent_service, client_id = номер строки CSV): поиск по фамилии — на сервере, карточка 
+клиента подтягивается по `GET /api/clients/{id}` со свежим риском. Слева переключатель 
+«Чаты / Клиенты»: кнопка «Разобрать» прогоняет клиента через агента в нижней панели (как терминал 
+в IDE), откуда можно «Продолжить в чате» — агент уже будет помнить разбор, менеджер видел его в панели.
+
+### Запуск без Docker (dev-режим)
 
 ```bash
 # Терминал 1 — API агента
@@ -146,11 +168,6 @@ cp env.example .env
 pip install -r requirements.txt
 python src/server.py  # → http://localhost:3050
 ```
-
-Веб-интерфейс: слева переключатель «Чаты / Клиенты». В разделе «Клиенты» —
-выгрузка с рисками: кнопка «Разобрать» прогоняет клиента через агента в нижней
-панели (как терминал в IDE), откуда можно «Продолжить в чате» — агент уже будет
-помнить разбор, менеджер видел его в панели.
 
 ---
 
@@ -233,11 +250,14 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 
 ### 8. Docker / MLOps практики
 
+- прикладной стек полностью в контейнерах: `make up` поднимает всё, кроме vLLM (`--build` — правки кода попадают в образы без ручных шагов);
+- выгрузка клиентов живёт в SQLite (`clients_store` в agent_service): идемпотентная перегонка CSV при старте (по mtime/size файла), состояние — в volume `agent-data`;
 - hot-reload модели и данных через volume mount;
 - Docker profile `rag_indexing` для batch-job (`restart: "no"`);
 - HF cache volumes для embedding/vLLM;
 - Qdrant persistence в `infra/qdrant/`;
-- env-based конфигурация vLLM без rebuild.
+- env-based конфигурация vLLM без rebuild;
+- `LLM_BASE_URL` env-оверрайд: один llm_config.json работает и локально (localhost:3040), и в compose-сети (vllm:8901).
 
 ---
 

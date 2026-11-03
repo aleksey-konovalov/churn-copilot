@@ -95,3 +95,13 @@ run-agent:
 .PHONY: run-frontend
 run-frontend:
 	cd services/frontend_service && python src/server.py
+
+# --- Полный стек в Docker, кроме vLLM (тяжёлый GPU-контейнер поднимается отдельно) ---
+
+.PHONY: up
+up:
+	docker compose up -d --build churn_pred_service embedding_service qdrant agent_service frontend_service
+
+.PHONY: down
+down:
+	docker compose down

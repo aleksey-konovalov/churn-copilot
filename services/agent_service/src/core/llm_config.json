@@ -5,7 +5,12 @@
     "base_url": "http://localhost:3040/v1",
     "api_key_env": "any",
     "temperature": 0.2,
-    "top_p": 0.9
+    "top_p": 0.9,
+    "extra_body": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    }
   },
   "local_qwen_summarizer": {
     "provider": "vllm",
