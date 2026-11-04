@@ -1,4 +1,3 @@
-
 # перевод технических названий фичей в человекопонятные описания
 FEATURE_MAP = {
     "client_id": "ID клиента",
@@ -17,13 +16,19 @@ FEATURE_MAP = {
     "NumOfProducts": "Количество банковских продуктов, которыми пользуется клиент",
     "HasCrCard": "Наличие кредитной карты у клиента",
     "IsActiveMember": "Является ли клиент активным членом банка",
-    "EstimatedSalary": "Предполагаемая заработная плата клиента"
+    "EstimatedSalary": "Предполагаемая заработная плата клиента",
 }
 
 # Список бинарных флагов, которые нужно переводить в Да/Нет
 BINARY_FEATURES = [
-    "is_germany", "is_single_product", "is_3plus_products", "is_age_over_45",
-    "is_zero_balance", "is_high_balance_inactive", "HasCrCard", "IsActiveMember"
+    "is_germany",
+    "is_single_product",
+    "is_3plus_products",
+    "is_age_over_45",
+    "is_zero_balance",
+    "is_high_balance_inactive",
+    "HasCrCard",
+    "IsActiveMember",
 ]
 
 # Русские значения категориальных фичей: в CSV они записаны сырьём (Female, France)

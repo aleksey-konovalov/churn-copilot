@@ -5,6 +5,7 @@
 
 LLM и prediction-сервис не нужны.
 """
+
 import asyncio
 import os
 import sys
@@ -12,15 +13,14 @@ from pathlib import Path
 
 import pytest
 
-SERVICE_ROOT = Path(__file__).resolve().parents[1]      # services/agent_service
-REPO_ROOT = SERVICE_ROOT.parents[1]                     # корень репозитория
+SERVICE_ROOT = Path(__file__).resolve().parents[1]  # services/agent_service
+REPO_ROOT = SERVICE_ROOT.parents[1]  # корень репозитория
 
 for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
 import clients_store as store  # noqa: E402
-
 
 CSV_CONTENT = (
     "id,CustomerId,Surname,CreditScore,Geography,Gender,Age,Tenure,Balance,"
@@ -87,7 +87,9 @@ def test_reingest_only_when_source_changes(store_paths, monkeypatch):
         await store.close_clients_store()
 
         csv_path = store_paths
-        csv_path.write_text(CSV_CONTENT + "15003,15593969.0,Novak,704,Germany,Female,35,5,12000.0,2,1,1,50000\n", encoding="utf-8")
+        csv_path.write_text(
+            CSV_CONTENT + "15003,15593969.0,Novak,704,Germany,Female,35,5,12000.0,2,1,1,50000\n", encoding="utf-8"
+        )
         os.utime(csv_path)  # гарантированно новое mtime
 
         await store.init_clients_store()
@@ -108,7 +110,7 @@ def test_search_by_surname(store_paths):
             assert [r["surname"] for r in rows] == ["Petrova"]
             assert await store.count_clients(search="Petrov") == 1
             assert await store.count_clients(search="петров") == 0  # Latin-данные: кириллица не матчится
-            assert await store.count_clients(search="") == 3        # пустой запрос — без фильтра
+            assert await store.count_clients(search="") == 3  # пустой запрос — без фильтра
         finally:
             await store.close_clients_store()
 
@@ -117,13 +119,16 @@ def test_search_by_surname(store_paths):
 
 def test_search_by_numeric_ids(store_paths):
     """Цифровой запрос: точное совпадение по client_id / csv_id / CustomerId + фамилия-подстрока."""
+
     async def scenario():
         await store.init_clients_store()
         try:
             assert (await store.fetch_client(1))["surname"] == "Petrova"
             assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="1")] == ["Petrova"]
             assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="15000")] == ["Ivanov"]
-            assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="15600512")] == ["Smirnov"]
+            assert [r["surname"] for r in await store.fetch_clients(limit=10, offset=0, search="15600512")] == [
+                "Smirnov"
+            ]
             assert await store.count_clients(search="150") == 0  # частичный ID не матчится
         finally:
             await store.close_clients_store()

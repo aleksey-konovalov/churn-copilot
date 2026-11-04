@@ -5,6 +5,7 @@
 сервисов и не упирается в CORS. SSE-ответы agent_service проксируются
 потоково, без буферизации.
 """
+
 import os
 import time
 from contextlib import asynccontextmanager
@@ -82,14 +83,12 @@ async def proxy_api(path: str, request: Request):
     headers["x-request-id"] = request_id_var.get()
     try:
         upstream_response = await _client.send(
-            _client.build_request(
-                request.method, url, content=await request.body(), headers=headers
-            ),
+            _client.build_request(request.method, url, content=await request.body(), headers=headers),
             stream=True,
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
         logger.exception(f"agent_service недоступен: {request.method} {url}")
-        raise HTTPException(502, "Agent Service недоступен")
+        raise HTTPException(502, "Agent Service недоступен") from exc
     return StreamingResponse(
         upstream_response.aiter_raw(),
         status_code=upstream_response.status_code,

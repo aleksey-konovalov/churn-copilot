@@ -1,15 +1,13 @@
+import asyncio
 import os
 import re
 import sys
-import asyncio
-from typing import List, Dict
 
 sys.path.insert(0, "/app/embedding_client")
 from client import EmbeddingClient
-
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import PointStruct
-from qdrant_wrapper import ensure_collection, batch_upsert, make_point
+from qdrant_wrapper import batch_upsert, ensure_collection, make_point
 
 from shared.utils.logger import get_logger, setup_logging
 
@@ -37,18 +35,18 @@ async def wait_for_embedding_service(client: EmbeddingClient, timeout: int = 120
     raise RuntimeError("Embedding service did not become ready in time.")
 
 
-async def load_and_chunk_file(filepath: str, filename: str) -> List[Dict]:
+async def load_and_chunk_file(filepath: str, filename: str) -> list[dict]:
     """
     Загружает файл и разрезает на чанки по '--...'.
     Сохраняет заголовок (# Политика №...) как отдельное поле, добавляет название файла.
     """
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         content = f.read()
 
     # Разделитель: строка, состоящая только из тире (3 и более) + возможные пробелы
-    raw_chunks = re.split(r'\n-{3,}\n', content.strip())
+    raw_chunks = re.split(r"\n-{3,}\n", content.strip())
 
-    chunks: List[Dict] = []
+    chunks: list[dict] = []
     for raw in raw_chunks:
         text = raw.strip()
         if not text:
@@ -58,11 +56,13 @@ async def load_and_chunk_file(filepath: str, filename: str) -> List[Dict]:
         lines = text.splitlines()
         title = lines[0].lstrip("# ").strip() if lines else ""
         # В payload попадает весь текст чанка (с заголовком)
-        chunks.append({
-            "title": title,
-            "content": text,
-            "source_file": filename,
-        })
+        chunks.append(
+            {
+                "title": title,
+                "content": text,
+                "source_file": filename,
+            }
+        )
     return chunks
 
 
@@ -87,7 +87,7 @@ async def main():
     try:
         # Чтение и чанкинг всех txt-файлов ДО пересоздания коллекции:
         # при пустом корпусе базу не трогаем
-        all_chunks: List[Dict] = []
+        all_chunks: list[dict] = []
         for filename in sorted(os.listdir(RAG_DATA_DIR)):
             if not filename.endswith(".txt"):
                 continue
@@ -108,16 +108,14 @@ async def main():
         await reset_collection(qdrant)
 
         # Эмбеддинг и загрузка батчами
-        points: List[PointStruct] = []
+        points: list[PointStruct] = []
         idx = 0
 
         for i in range(0, len(all_chunks), BATCH_SIZE):
             batch = all_chunks[i : i + BATCH_SIZE]
             texts = [chunk["content"] for chunk in batch]
-            embeddings = await embedding_client.get_embeddings(
-                texts, task=EMBEDDING_TASK
-            )
-            for chunk, vector in zip(batch, embeddings):
+            embeddings = await embedding_client.get_embeddings(texts, task=EMBEDDING_TASK)
+            for chunk, vector in zip(batch, embeddings, strict=False):
                 payload = {
                     "title": chunk["title"],
                     "content": chunk["content"],
@@ -126,7 +124,7 @@ async def main():
                 }
                 points.append(make_point(idx=idx, vector=vector, payload=payload))
                 idx += 1
-            logger.info(f"Embedded batch {i//BATCH_SIZE + 1}/{(len(all_chunks)-1)//BATCH_SIZE + 1}")
+            logger.info(f"Embedded batch {i // BATCH_SIZE + 1}/{(len(all_chunks) - 1) // BATCH_SIZE + 1}")
 
         # Загрузка в Qdrant
         await batch_upsert(qdrant, points, batch_size=BATCH_SIZE)

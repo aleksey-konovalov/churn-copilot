@@ -3,6 +3,7 @@
 Запуск из корня репозитория:
     python -m pytest shared/tests -q
 """
+
 import json
 import logging
 

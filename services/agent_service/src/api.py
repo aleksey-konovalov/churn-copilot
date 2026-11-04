@@ -16,6 +16,7 @@ REST/SSE API для веб-фронтенда (frontend_service).
 Выгрузка клиентов живёт в SQLite (clients_store): CSV перегоняется туда при
 старте сервиса, /api/clients и /api/clients/{id} читают из БД.
 """
+
 import json
 import os
 import uuid
@@ -23,6 +24,9 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 
 import aiosqlite
+import clients_store as store
+from core.agent import get_checkpoint_db_path, get_root_agent
+from core.callbacks import TokenUsageCallback
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
@@ -33,16 +37,13 @@ from shared.utils.http import create_async_client
 from shared.utils.logger import get_logger
 from shared.utils.text import sanitize_llm_text
 
-import clients_store as store
-from core.agent import get_checkpoint_db_path, get_root_agent
-from core.callbacks import TokenUsageCallback
-
 logger = get_logger("agent_service.api")
 
 router = APIRouter(prefix="/api")
 
 
 # =========  SSE-утилиты  =========
+
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -131,6 +132,7 @@ async def _touch_thread(thread_id: str, title: str | None = None, client_id: str
 
 # =========  Модели запросов  =========
 
+
 class ChatRequest(BaseModel):
     thread_id: str | None = None
     message: str = Field(min_length=1)
@@ -138,6 +140,7 @@ class ChatRequest(BaseModel):
 
 class SeedRequest(BaseModel):
     """Создание чата с уже готовым разбором клиента в памяти агента."""
+
     title: str
     analysis_text: str
     client_id: str | None = None
@@ -149,6 +152,7 @@ class AnalyzeRequest(BaseModel):
 
 
 # =========  Общий стрим агента (чат)  =========
+
 
 async def _stream_agent(agent, message_text: str, thread_id: str, text_sink: list | None = None):
     """Стримит работу корневого агента в SSE: старт/финиш тулов и токены ответов.
@@ -205,12 +209,14 @@ async def _stream_agent(agent, message_text: str, thread_id: str, text_sink: lis
                             and msg.tool_call_id not in ended_tools
                         ):
                             ended_tools.add(msg.tool_call_id)
-                            yield _sse({
-                                "type": "tool",
-                                "phase": "end",
-                                "name": msg.name or started_tools[msg.tool_call_id],
-                                "ok": getattr(msg, "status", "success") == "success",
-                            })
+                            yield _sse(
+                                {
+                                    "type": "tool",
+                                    "phase": "end",
+                                    "name": msg.name or started_tools[msg.tool_call_id],
+                                    "ok": getattr(msg, "status", "success") == "success",
+                                }
+                            )
         yield _sse({"type": "done"})
     except Exception as exc:
         logger.exception(f"Ошибка стрима агента (thread={thread_id})")
@@ -232,6 +238,7 @@ async def chat(body: ChatRequest):
 
 # =========  Список и история диалогов  =========
 
+
 @router.get("/threads")
 async def list_threads():
     """Диалоги для левой панели: только чаты с метаданными (служебные разборы скрыты)."""
@@ -240,7 +247,7 @@ async def list_threads():
     cur = await _meta_conn.execute(
         "SELECT thread_id, title, client_id, updated_at FROM thread_meta ORDER BY updated_at DESC"
     )
-    rows = [dict(zip(["thread_id", "title", "client_id", "updated_at"], r)) for r in await cur.fetchall()]
+    rows = [dict(zip(["thread_id", "title", "client_id", "updated_at"], r, strict=False)) for r in await cur.fetchall()]
     return {"threads": rows}
 
 
@@ -315,6 +322,7 @@ async def seed_thread(body: SeedRequest):
 
 # =========  Разбор клиента одной кнопкой (нижняя панель)  =========
 
+
 def _format_value(feature: str, value) -> str:
     if feature in BINARY_FEATURES:
         try:
@@ -332,12 +340,14 @@ def _labeled_reasons(prediction: dict) -> list[dict]:
     reasons = []
     for reason in prediction.get("top_reasons", []):
         feature = reason.get("feature", "")
-        reasons.append({
-            "feature": feature,
-            "label": FEATURE_MAP.get(feature, feature.replace("_", " ")),
-            "value": _format_value(feature, reason.get("feature_value")),
-            "pct": reason.get("risk_contribution_pct", 0.0),
-        })
+        reasons.append(
+            {
+                "feature": feature,
+                "label": FEATURE_MAP.get(feature, feature.replace("_", " ")),
+                "value": _format_value(feature, reason.get("feature_value")),
+                "pct": reason.get("risk_contribution_pct", 0.0),
+            }
+        )
     return reasons
 
 
@@ -420,9 +430,9 @@ async def analyze(body: AnalyzeRequest):
 
 # Пороги бакетов риска — синхронизированы с FILTERS/riskClass в frontend_service/web/app.js
 RISK_BUCKETS: dict[str, tuple[float | None, float | None]] = {
-    "high": (0.6, None),   # p >= 0.6
-    "mid": (0.4, 0.6),     # 0.4 <= p < 0.6
-    "low": (None, 0.4),    # p < 0.4
+    "high": (0.6, None),  # p >= 0.6
+    "mid": (0.4, 0.6),  # 0.4 <= p < 0.6
+    "low": (None, 0.4),  # p < 0.4
 }
 
 # Карта рисков всех клиентов {client_id: probability}: строится одним batch-вызовом
@@ -529,23 +539,17 @@ async def list_clients(limit: int = 50, offset: int = 0, q: str | None = None, r
                 len(matched),
             )
             if risk != "all":
-                matched = [
-                    row for row in matched
-                    if _bucket_of(risks_full.get(row["client_id"])) == risk
-                ]
+                matched = [row for row in matched if _bucket_of(risks_full.get(row["client_id"])) == risk]
             total = len(matched)
-            page_rows = matched[offset:offset + limit]
+            page_rows = matched[offset : offset + limit]
         else:
             page_rows = await store.fetch_clients(limit=limit, offset=offset, search=q)
             total = await store.count_clients(search=q)
             risks_full = await _risk_map()
             counts = _risk_counts(risks_full, await store.count_clients())
-    except store.StoreNotReady:
-        raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
-    clients = [
-        {**_display_client(row), "churn_probability": risks_full.get(row["client_id"])}
-        for row in page_rows
-    ]
+    except store.StoreNotReady as exc:
+        raise HTTPException(503, "Хранилище клиентов ещё инициализируется") from exc
+    clients = [{**_display_client(row), "churn_probability": risks_full.get(row["client_id"])} for row in page_rows]
     return {"total": total, "clients": clients, "risk_counts": counts}
 
 
@@ -554,8 +558,8 @@ async def get_client(client_id: int):
     """Один клиент по id (карточка, deep-link после seed) + свежий риск из predict-сервиса."""
     try:
         row = await store.fetch_client(client_id)
-    except store.StoreNotReady:
-        raise HTTPException(503, "Хранилище клиентов ещё инициализируется")
+    except store.StoreNotReady as exc:
+        raise HTTPException(503, "Хранилище клиентов ещё инициализируется") from exc
     if row is None:
         raise HTTPException(404, f"Клиент {client_id} не найден в выгрузке")
     prediction = await _fetch_prediction(client_id)

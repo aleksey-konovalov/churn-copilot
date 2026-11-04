@@ -1,9 +1,9 @@
-import os
 import json
+import os
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv, find_dotenv
 
 # Загружаем переменные окружения из .env
 load_dotenv(find_dotenv())
@@ -11,10 +11,12 @@ load_dotenv(find_dotenv())
 # Путь к конфигу. По дефолту лежит в той же папке, что и этот скрипт
 CONFIG_PATH = Path(__file__).parent / "llm_config.json"
 
+
 def load_config() -> dict:
     """Чтение JSON конфига."""
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)
+
 
 def get_llm_client(profile_name: str = None) -> ChatOpenAI:
     """
@@ -62,6 +64,7 @@ def get_llm_client(profile_name: str = None) -> ChatOpenAI:
 
     return llm
 
+
 def get_optional_llm_client(profile_name: str) -> ChatOpenAI | None:
     """
     Клиент из профиля или None, если профиль не существует или его API-ключ не задан.
@@ -79,6 +82,7 @@ def get_optional_llm_client(profile_name: str) -> ChatOpenAI | None:
         return None
 
     return get_llm_client(profile_name)
+
 
 # Глобальная инициализация для импорта в других файлах
 # В .env должна быть определена переменная ACTIVE_LLM_PROFILE

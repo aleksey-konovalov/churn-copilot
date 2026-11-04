@@ -6,22 +6,22 @@ Lifespan управляет состоянием сервиса: при стар
 перегонкой CSV-выгрузки), при остановке закрывает соединения (checkpointer,
 embedding-сервис, Qdrant).
 """
+
 import os
 import time
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import Response
-
-from shared.utils.logger import get_logger, setup_logging
-from shared.utils.request_id import ensure_request_id, request_id_var
-
 from api import close_thread_meta, init_thread_meta, router
 from clients_store import close_clients_store, init_clients_store
 from core.agent import init_root_agent, shutdown_root_agent
 from core.rag import close_qdrant
 from embedding_service.src.client import embedding_client
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
+
+from shared.utils.logger import get_logger, setup_logging
+from shared.utils.request_id import ensure_request_id, request_id_var
 
 SERVICE_NAME = os.getenv("SERVICE_NAME", "agent_service")
 setup_logging(SERVICE_NAME)
@@ -67,6 +67,7 @@ async def request_id_middleware(
         (time.perf_counter() - started) * 1000,
     )
     return response
+
 
 if __name__ == "__main__":
     logger.info("Запуск Agent Service API на http://0.0.0.0:7860")
