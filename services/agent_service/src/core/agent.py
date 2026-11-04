@@ -12,6 +12,8 @@ import aiosqlite
 import httpx
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
     ModelFallbackMiddleware,
     SummarizationMiddleware,
     ToolCallLimitMiddleware,
@@ -89,12 +91,36 @@ async def get_churn_analysis_and_retention(query: str):
 
 
 def _root_middleware() -> list:
-    """Стек middleware корневого агента: fallback, суммаризация истории, лимит вызовов тулов."""
+    """Стек middleware корневого агента.
+
+    Порядок важен: ContextEditing стоит ДО Summarization — сначала дёшево
+    очищаются старые tool-результаты (view-level, история в state не меняется),
+    и только потом считается порог суммаризации. Если поменять местами,
+    суммаризация сжимает историю вместе с дорогими tool-результатами
+    (потеря точных цифр), а ContextEditing после неё уже не срабатывает:
+    порог на сжатой истории не достигается.
+    """
     middleware = _fallback_middleware()
+
+    # Редактирование контекста: старые tool-результаты заменяются на "[cleared]"
+    # (правило повторного запроса уже в root_agent_prompt). 0/negative — выключить.
+    trigger_tokens = int(os.getenv("CONTEXT_EDITING_TRIGGER_TOKENS", "8000"))
+    if trigger_tokens > 0:
+        middleware.append(
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=trigger_tokens,
+                        keep=int(os.getenv("CONTEXT_EDITING_KEEP_TOOL_RESULTS", "1")),
+                        clear_tool_inputs=True,
+                    )
+                ]
+            )
+        )
 
     # Порог задается в токенах и должен быть заметно меньше MAX_MODEL_LEN vLLM
     # (при 16384 — 10000, при 8192 — ~5000)
-    trigger_tokens = int(os.getenv("SUMMARIZATION_TRIGGER_TOKENS", 10000))
+    trigger_tokens = int(os.getenv("SUMMARIZATION_TRIGGER_TOKENS", "10000"))
     keep_messages = int(os.getenv("SUMMARIZATION_KEEP_MESSAGES", 8))
     middleware.append(
         SummarizationMiddleware(
