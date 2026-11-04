@@ -4,6 +4,7 @@
 Краткосрочная память корневого агента — persistent checkpointer (SQLite).
 Инициализация — init_root_agent() при старте сервиса (вызывается из main.py).
 """
+
 import os
 from pathlib import Path
 
@@ -46,13 +47,15 @@ def _fallback_middleware() -> list:
     return [ModelFallbackMiddleware(fallback_llm)]
 
 
-# =========  Суб-агент для получения экспертизы по корпоративным политикам и маркетинговым предложениям по удержанию.  =========
+# =========  Суб-агент для получения экспертизы по корпоративным политикам
+# и маркетинговым предложениям по удержанию.  =========
 
 churn_analysis_and_retention_agent = create_agent(
     llm,
     tools=[get_churn_info],
     system_prompt=churn_analysis_and_retention_agent_prompt,
-    middleware=_fallback_middleware() + [
+    middleware=_fallback_middleware()
+    + [
         # Сетевые сбои тулов (prediction-сервис, embedding, Qdrant) и 5xx: 2 ретрая,
         # затем ошибка уходит модели текстом
         ToolRetryMiddleware(
@@ -66,23 +69,24 @@ churn_analysis_and_retention_agent = create_agent(
     ],
 )
 
+
 # Тул, в рамках которого будет работать суб-агент churn_analysis_and_retention_agent
 @tool(
     "get_churn_analysis_and_retention",
-    description="Используй для получения экспертизы по корпоративным политикам и маркетинговым предложениям по удержанию. \
-        Не используй для обычного диалога или приветствий."
+    description="Используй для получения экспертизы по корпоративным политикам \
+и маркетинговым предложениям по удержанию. \
+        Не используй для обычного диалога или приветствий.",
 )
 async def get_churn_analysis_and_retention(query: str):
     logger.info("Задача передана агенту churn_analysis_and_retention_agent")
-    result = await churn_analysis_and_retention_agent.ainvoke(
-        {"messages": [{"role": "user", "content": query}]}
-    )
+    result = await churn_analysis_and_retention_agent.ainvoke({"messages": [{"role": "user", "content": query}]})
     # Суб-агент эфемерный (без checkpointer): его внутренняя история не сохраняется,
     # наружу отдаём только финальный ответ
     return f"Результат по твоему запросу {query}: \n{sanitize_llm_text(result['messages'][-1].content)}"
 
 
 # ==========   Основной агент: диалог с пользователем и раздача задач суб-агентам   ==========
+
 
 def _root_middleware() -> list:
     """Стек middleware корневого агента: fallback, суммаризация истории, лимит вызовов тулов."""
@@ -102,9 +106,7 @@ def _root_middleware() -> list:
     )
 
     middleware.append(
-        ToolCallLimitMiddleware(
-            tool_name="get_churn_analysis_and_retention", run_limit=5, exit_behavior="end"
-        )
+        ToolCallLimitMiddleware(tool_name="get_churn_analysis_and_retention", run_limit=5, exit_behavior="end")
     )
     return middleware
 
@@ -135,9 +137,7 @@ async def init_root_agent() -> None:
     """
     global root_agent, _checkpointer_conn, _db_path
 
-    db_path = os.getenv("CHECKPOINT_DB_PATH") or str(
-        Path(__file__).resolve().parents[1] / "checkpoints.db"
-    )
+    db_path = os.getenv("CHECKPOINT_DB_PATH") or str(Path(__file__).resolve().parents[1] / "checkpoints.db")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     _checkpointer_conn = await aiosqlite.connect(db_path)

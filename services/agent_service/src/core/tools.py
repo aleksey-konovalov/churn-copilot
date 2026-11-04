@@ -1,21 +1,23 @@
 import os
+
 import httpx
 from langchain.tools import tool
 
 from shared.utils.logger import get_logger
 from shared.utils.validators import parse_and_validate_client_id
-from .formatters import generate_report, build_complex_query_from_reasons
+
+from .formatters import build_complex_query_from_reasons, generate_report
 from .rag import search_qdrant
 
 logger = get_logger("agent_service.core.tools")
 
 # Конфигурация
-CHURN_PROB_THRESHOLD = float(os.getenv('CHURN_PROB_THRESHOLD', 0.5))
+CHURN_PROB_THRESHOLD = float(os.getenv("CHURN_PROB_THRESHOLD", 0.5))
 
 
 @tool(
     "get_churn_info",
-    description="Используй для получения информации о клиенте, вероятности его оттока и рекомендаций по удержанию."
+    description="Используй для получения информации о клиенте, вероятности его оттока и рекомендаций по удержанию.",
 )
 async def get_churn_info(client_id: str):
     """
@@ -78,7 +80,9 @@ async def get_churn_info(client_id: str):
 
             if policies_context:
                 logger.debug(f"Получен контекст политик (длина: {len(policies_context)} символов)")
-                report += f"\n\n--- НАЙДЕННЫЕ КОРПОРАТИВНЫЕ ПОЛИТИКИ И РЕКОМЕНДАЦИИ ПО УДЕРЖАНИЮ ---\n{policies_context}"
+                report += (
+                    f"\n\n--- НАЙДЕННЫЕ КОРПОРАТИВНЫЕ ПОЛИТИКИ И РЕКОМЕНДАЦИИ ПО УДЕРЖАНИЮ ---\n{policies_context}"
+                )
             else:
                 logger.warning("RAG ничего не нашел по запросу удержания")
         else:

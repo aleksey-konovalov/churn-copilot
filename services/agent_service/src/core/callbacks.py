@@ -1,4 +1,5 @@
 """Наблюдаемость: логирование расхода токенов LLM для калибровки порогов контекста."""
+
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 

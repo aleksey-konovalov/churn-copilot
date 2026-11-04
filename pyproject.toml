@@ -1,0 +1,17 @@
+# Корневая конфигурация инструментов: тесты и линтинг.
+# Сервисы имеют собственные pyproject/requirements — здесь только общее.
+
+[tool.pytest.ini_options]
+testpaths = ["shared/tests", "services/agent_service/tests"]
+
+[tool.ruff]
+target-version = "py310"   # базовый образ сервисов — python:3.10-slim
+line-length = 120
+extend-exclude = ["data_science/notebooks", ".zcode"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Тексты промптов — данные для LLM: переносы строк меняют само сообщение.
+"services/agent_service/src/core/prompts.py" = ["E501"]

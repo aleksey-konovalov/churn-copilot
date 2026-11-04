@@ -6,6 +6,7 @@
 LLM, prediction-сервис и Qdrant не нужны: агент не инициализируется,
 недоступный predict-сервис даёт churn_probability=None.
 """
+
 import asyncio
 import json
 import os
@@ -16,8 +17,8 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
-SERVICE_ROOT = Path(__file__).resolve().parents[1]      # services/agent_service
-REPO_ROOT = SERVICE_ROOT.parents[1]                     # корень репозитория
+SERVICE_ROOT = Path(__file__).resolve().parents[1]  # services/agent_service
+REPO_ROOT = SERVICE_ROOT.parents[1]  # корень репозитория
 
 for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_ROOT)):
     if path not in sys.path:
@@ -26,13 +27,13 @@ for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_RO
 os.environ.setdefault("COLLECTION_NAME", "test_collection")
 os.environ.setdefault("ACTIVE_LLM_PROFILE", "local_qwen_agent")
 
-from api import _format_value, _short_title, _stream_agent, close_thread_meta, init_thread_meta  # noqa: E402
 import api  # noqa: E402  # модуль — для monkeypatch get_checkpoint_db_path и _touch_thread
+from api import _format_value, _short_title, _stream_agent, close_thread_meta, init_thread_meta  # noqa: E402
 from clients_store import close_clients_store, init_clients_store  # noqa: E402
 from main import app  # noqa: E402
 
-
 # ---------- чистые функции ----------
+
 
 def test_short_title_truncates():
     assert _short_title("Привет") == "Привет"
@@ -62,6 +63,7 @@ def test_format_value_russian_display():
 
 # ---------- SSE-стрим агента ----------
 
+
 class _FakeAgent:
     """Отдаёт заранее заданные события astream(stream_mode=["messages", "updates"])."""
 
@@ -74,15 +76,22 @@ class _FakeAgent:
 
 
 def _parse_sse(chunks):
-    return [json.loads(chunk[len("data: "):]) for chunk in chunks]
+    return [json.loads(chunk[len("data: ") :]) for chunk in chunks]
 
 
 def test_stream_agent_handles_full_ai_message():
     """create_agent с middleware отдаёт готовые AIMessage (не chunk): тулы и текст должны попасть в SSE."""
     events = [
-        ("messages", (AIMessage(content="", tool_calls=[
-            {"id": "t1", "name": "get_churn_info", "args": {"client_id": 1}, "type": "tool_call"}
-        ]), {"langgraph_step": "1"})),
+        (
+            "messages",
+            (
+                AIMessage(
+                    content="",
+                    tool_calls=[{"id": "t1", "name": "get_churn_info", "args": {"client_id": 1}, "type": "tool_call"}],
+                ),
+                {"langgraph_step": "1"},
+            ),
+        ),
         ("updates", {"tools": {"messages": [ToolMessage(content="ok", tool_call_id="t1", name="get_churn_info")]}}),
         ("messages", (AIMessage(content="Готовый разбор клиента."), {"langgraph_step": "2"})),
     ]
@@ -111,6 +120,7 @@ def test_stream_agent_reports_errors():
 
 
 # ---------- эндпоинты (агент и хранилище клиентов не инициализированы) ----------
+
 
 @pytest.fixture(scope="module")
 def client():
@@ -198,14 +208,15 @@ def test_clients_search_q(client, clients_store):
 
 def test_clients_search_by_ids(client, clients_store):
     """Цифровой запрос ищет и по фамилии, и по client_id / csv_id / CustomerId (точные совпадения)."""
+
     def surnames(query):
         data = client.get("/api/clients", params={"q": query}).json()
         return [c["surname"] for c in data["clients"]]
 
-    assert surnames("1") == ["Petrova"]            # client_id
-    assert surnames("15000") == ["Ivanov"]         # csv_id
-    assert surnames("15782454") == ["Ivanov"]      # CustomerId
-    assert surnames("150") == []                   # частичный ID не матчится (префикс отключён)
+    assert surnames("1") == ["Petrova"]  # client_id
+    assert surnames("15000") == ["Ivanov"]  # csv_id
+    assert surnames("15782454") == ["Ivanov"]  # CustomerId
+    assert surnames("150") == []  # частичный ID не матчится (префикс отключён)
 
 
 def test_clients_get_by_id(client, clients_store):
@@ -225,11 +236,12 @@ def test_clients_limit_bounds(client, clients_store):
 
 # ---------- серверный фильтр по риску (карта рисков в кэше процесса) ----------
 
+
 def test_risk_bucket_helpers():
     from api import _bucket_of, _risk_counts
 
     assert _bucket_of(0.9) == "high"
-    assert _bucket_of(0.6) == "high"      # граница входит в высокий
+    assert _bucket_of(0.6) == "high"  # граница входит в высокий
     assert _bucket_of(0.59) == "mid"
     assert _bucket_of(0.4) == "mid"
     assert _bucket_of(0.39) == "low"
@@ -237,7 +249,11 @@ def test_risk_bucket_helpers():
     assert _bucket_of("0.9") is None
 
     assert _risk_counts({0: 0.9, 1: None}, 3) == {
-        "all": 3, "high": 1, "mid": 0, "low": 0, "unknown": 2,
+        "all": 3,
+        "high": 1,
+        "mid": 0,
+        "low": 0,
+        "unknown": 2,
     }
 
 
@@ -267,6 +283,7 @@ def test_clients_risk_filter_server_side(client, clients_store):
 
 
 # ---------- удаление чатов (thread_meta; агент не нужен) ----------
+
 
 @pytest.fixture()
 def threads_meta(tmp_path, monkeypatch):

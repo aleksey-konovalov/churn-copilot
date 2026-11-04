@@ -7,6 +7,7 @@ CSV-выгрузка (data_science/data/raw/test.csv) перегоняется �
 же контракт, что у churn_pred_service (/predict?client_id=N читает строку N).
 Колонки id и CustomerId из CSV сохраняются как справочные.
 """
+
 import asyncio
 import csv
 import os
@@ -26,9 +27,20 @@ class StoreNotReady(RuntimeError):
 _clients_conn: aiosqlite.Connection | None = None
 
 _COLUMNS = [
-    "client_id", "csv_id", "customer_id", "surname", "credit_score", "geography",
-    "gender", "age", "tenure", "balance", "num_of_products", "has_cr_card",
-    "is_active_member", "estimated_salary",
+    "client_id",
+    "csv_id",
+    "customer_id",
+    "surname",
+    "credit_score",
+    "geography",
+    "gender",
+    "age",
+    "tenure",
+    "balance",
+    "num_of_products",
+    "has_cr_card",
+    "is_active_member",
+    "estimated_salary",
 ]
 
 _SCHEMA = """
@@ -57,9 +69,7 @@ CREATE TABLE IF NOT EXISTS clients_meta (
 
 
 def clients_db_path() -> str:
-    return os.getenv("CLIENTS_DB_PATH") or str(
-        Path(__file__).resolve().parents[1] / "clients.db"
-    )
+    return os.getenv("CLIENTS_DB_PATH") or str(Path(__file__).resolve().parents[1] / "clients.db")
 
 
 def clients_csv_path() -> str:
@@ -148,13 +158,10 @@ async def _reingest(csv_path: str, fingerprint: tuple[str, str, str]) -> None:
     placeholders = ", ".join("?" * len(_COLUMNS))
     # DELETE открывает неявную транзакцию: полная перезаливка атомарна по commit
     await _clients_conn.execute("DELETE FROM clients")
+    await _clients_conn.executemany(f"INSERT INTO clients ({', '.join(_COLUMNS)}) VALUES ({placeholders})", rows)
     await _clients_conn.executemany(
-        f"INSERT INTO clients ({', '.join(_COLUMNS)}) VALUES ({placeholders})", rows
-    )
-    await _clients_conn.executemany(
-        "INSERT INTO clients_meta (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        list(zip(("source_path", "source_mtime", "source_size"), fingerprint)),
+        "INSERT INTO clients_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        list(zip(("source_path", "source_mtime", "source_size"), fingerprint, strict=False)),
     )
     await _clients_conn.commit()
     logger.info(f"Выгрузка клиентов перегнана в БД: {len(rows)} строк ({csv_path})")
@@ -209,7 +216,7 @@ def _search_clause(search: str) -> tuple[str, list]:
 
 
 def _row_to_dict(row: tuple) -> dict:
-    return dict(zip(_COLUMNS, row))
+    return dict(zip(_COLUMNS, row, strict=False))
 
 
 async def count_clients(search: str | None = None) -> int:
@@ -248,8 +255,6 @@ async def fetch_clients(limit: int, offset: int, search: str | None = None) -> l
 
 async def fetch_client(client_id: int) -> dict | None:
     conn = _require_conn()
-    cur = await conn.execute(
-        f"SELECT {', '.join(_COLUMNS)} FROM clients WHERE client_id = ?", (client_id,)
-    )
+    cur = await conn.execute(f"SELECT {', '.join(_COLUMNS)} FROM clients WHERE client_id = ?", (client_id,))
     row = await cur.fetchone()
     return _row_to_dict(row) if row else None

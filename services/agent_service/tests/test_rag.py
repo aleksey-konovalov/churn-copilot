@@ -5,6 +5,7 @@
 
 Qdrant и embedding-сервис мокаются: сеть не нужна.
 """
+
 import asyncio
 import os
 import sys
@@ -14,8 +15,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-SERVICE_ROOT = Path(__file__).resolve().parents[1]      # services/agent_service
-REPO_ROOT = SERVICE_ROOT.parents[1]                     # корень репозитория
+SERVICE_ROOT = Path(__file__).resolve().parents[1]  # services/agent_service
+REPO_ROOT = SERVICE_ROOT.parents[1]  # корень репозитория
 
 for path in (str(SERVICE_ROOT / "src"), str(REPO_ROOT / "services"), str(REPO_ROOT)):
     if path not in sys.path:
@@ -68,10 +69,12 @@ POLICY_PAYLOAD = {"content": "Текст политики", "title": "Полит
 
 def test_vote_boost_raises_multi_variant_hits(monkeypatch):
     """Чанк, найденный обоими вариантами, получает буст и пометку о совпадениях."""
-    qdrant = FakeQdrant([
-        [make_point(1, 0.60, POLICY_PAYLOAD), make_point(2, 0.55, POLICY_PAYLOAD)],
-        [make_point(1, 0.62, POLICY_PAYLOAD)],
-    ])
+    qdrant = FakeQdrant(
+        [
+            [make_point(1, 0.60, POLICY_PAYLOAD), make_point(2, 0.55, POLICY_PAYLOAD)],
+            [make_point(1, 0.62, POLICY_PAYLOAD)],
+        ]
+    )
     patch_rag(monkeypatch, qdrant)
 
     context = asyncio.run(rag.search_qdrant(["запрос A", "запрос B"]))
