@@ -1,0 +1,38 @@
+# CI: линт (ruff) + модульные тесты (pytest).
+# Тесты не требуют GPU и внешних сервисов (LLM, Qdrant, prediction — заглушены),
+# поэтому гоняются на обычном ubuntu-раннере.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # Версия ruff зафиксирована: конфиг и правила не должны «плыть» между прогонами
+      - run: pip install ruff==0.17.3
+      - run: ruff check .
+      - run: ruff format --check .
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10" # как базовый образ сервисов (python:3.10-slim)
+          cache: pip
+          cache-dependency-path: services/agent_service/requirements.txt
+      - run: pip install -e shared -r services/agent_service/requirements.txt pytest
+      - run: pytest
