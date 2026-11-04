@@ -289,6 +289,13 @@ Embedding service: strategy pattern (`FridaEmbedder` / `GigaEmbedder`) с task-s
 - env-based конфигурация vLLM без rebuild;
 - `LLM_BASE_URL` env-оверрайд: один llm_config.json работает и локально (localhost:3040), и в compose-сети (vllm:8901).
 
+### 9. Управление контекстом и память агента
+
+Корневой агент — стек middleware LangChain, каждый слой решает свою задачу:
+`ModelFallback` (OpenAI-профиль, если задан ключ) → `ContextEditing` (старые tool-результаты заменяются на `[cleared]`, модель умеет перезапрашивать) → `Summarization` (сжатие истории локальным Qwen с сохранением ID клиентов и вероятностей) → `ToolCallLimit` → `MemoryInjection` (долгосрочная память).
+
+Долгосрочная память: устойчивые факты о пользователе (роль, предпочтения по формату) извлекаются из диалогов фоновым LLM-экстрактором **после** ответа (без задержки) и складываются в `AsyncSqliteStore` (langgraph), где ищутся по смыслу — sqlite-vec + embedding-сервис (FRIDA) — и подставляются в system prompt. Store переживает рестарт сервиса; недоступный embedding/LLM не блокирует диалог.
+
 ---
 
 ## Пример диалога
