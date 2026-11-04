@@ -182,6 +182,25 @@ docker compose up -d vllm   # агент найдёт его по имени: ht
 
 ---
 
+## Тесты и линтинг
+
+Модульные тесты `shared/` (логгер) и `agent_service/` (REST API, SQLite-стор клиентов, RAG).
+Внешние зависимости не нужны: LLM, prediction-сервис и Qdrant заглушены, всё бегает на обычном Python:
+
+```bash
+python -m pytest    # из корня репозитория; набор тестов — testpaths в pyproject.toml
+```
+
+Линтинг — ruff (конфиг в корневом `pyproject.toml`, line-length 120, target py310 — как базовый образ сервисов):
+
+```bash
+ruff check . && ruff format --check .
+```
+
+Оба шага гоняются в CI (GitHub Actions) на каждый push в `main` и PR.
+
+---
+
 ## Data Science: от данных до модели
 
 ### Источник данных
@@ -310,7 +329,7 @@ docker run --rm --network churn_copilot_default curlimages/curl \
 |-----------|------------|
 | ML | CatBoost, scikit-learn, Optuna, pandas |
 | Explainability | TreeSHAP (CatBoost native) |
-| Agent | LangChain 1.0, LangGraph, Tool Calling |
+| Agent | LangChain 1.4, LangGraph, Tool Calling |
 | LLM | vLLM + Qwen3.6-27B-AWQ; fallback OpenAI |
 | RAG | Qdrant, FRIDA embeddings |
 | API / UI | FastAPI, vanilla JS SPA, httpx |
