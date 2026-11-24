@@ -1,22 +1,25 @@
 """
-Долгосрочная семантическая память корневого агента (stage 5 плана контекст-оптимизации).
+Долгосрочная память корневого агента (stage 5 плана контекст-оптимизации).
 
-Что даёт: агент вспоминает устойчивые факты о пользователе из прошлых диалогов
-(роль, предпочтения по формату ответов, повторяющиеся темы, правки стиля работы),
-даже если они вытеснены из контекста суммаризацией или диалог начался заново.
+Что даёт: агент вспоминает устойчивые предпочтения пользователя из прошлых
+диалогов (стиль и детальность ответов, роль, паттерны работы, правки), даже
+если они вытеснены из контекста суммаризацией или диалог начался заново.
+В память попадает только то, что полезно независимо от темы и клиента;
+данные конкретных клиентов (вероятности, причины, планы) туда не пишутся.
 
 Механика:
-- Store: AsyncSqliteStore — переживает рестарт сервиса; факты лежат в namespace
-  ("memories", user_id) и ищутся по смыслу (sqlite-vec + embedding-сервис);
+- Store: AsyncSqliteStore без векторного индекса (простое KV-хранилище) —
+  переживает рестарт сервиса; факты лежат в namespace ("memories", user_id);
 - MemoryInjectionMiddleware:
-  * awrap_model_call — перед каждым вызовом модели ищет релевантные факты по
-    последней реплике пользователя и дописывает их в system prompt (view-level,
-    история сообщений не меняется);
+  * awrap_model_call — перед каждым вызовом модели подставляет последние
+    top_k фактов пользователя в system prompt (view-level, история сообщений
+    не меняется). Без семантического поиска по реплике: факты — про
+    пользователя, а не про клиентов, поэтому релевантны в любом диалоге;
   * aafter_agent — после прогона агента фоново (asyncio.create_task, без задержки
     ответа) извлекает из последнего обмена новые факты (LLM-экстрактор) и пишет
     их в store;
-- отказоустойчивость: недоступные embedding-сервис/store/LLM не блокируют диалог —
-  ошибки памяти логируются, агент продолжает работать без неё.
+- отказоустойчивость: недоступные store/LLM не блокируют диалог — ошибки памяти
+  логируются, агент продолжает работать без неё.
 """
 
 import asyncio
@@ -25,9 +28,7 @@ import json
 import os
 import re
 
-from embedding_service.src.client import embedding_client
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.config import get_config
 from langgraph.store.sqlite.aio import AsyncSqliteStore
@@ -49,6 +50,10 @@ _MIN_FACT_CHARS = 3
 _MAX_FACT_CHARS = 500
 _EXCERPT_MAX_CHARS = 8000
 
+# Сколько последних записей сканируем из store перед сортировкой по свежести
+# (де-факто верхняя граница «глубины» памяти: старое за пределами скана не всплывает)
+_FACTS_SCAN_LIMIT = 100
+
 
 def _current_user_id() -> str:
     """user_id из configurable запроса (api.py), с фолбэками на thread_id и DEFAULT_USER_ID.
@@ -64,43 +69,17 @@ def _current_user_id() -> str:
     return str(configurable.get("user_id") or configurable.get("thread_id") or default)
 
 
-class EmbeddingServiceEmbeddings(Embeddings):
-    """Мост между LangGraph Store и embedding-сервисом (FRIDA).
-
-    AsyncSqliteStore вызывает aembed_documents и при aput (индексация фактов),
-    и при asearch (эмбеддинг поискового запроса) — различить "search_document" и
-    "search_query" на этом уровне невозможно, поэтому для обеих сторон используем
-    симметричную instruct-задачу "paraphrase" ("Retrieve semantically similar text").
-    """
-
-    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
-        return await embedding_client.get_embeddings(texts, task="paraphrase")
-
-    async def aembed_query(self, text: str) -> list[float]:
-        return (await embedding_client.get_embeddings([text], task="paraphrase"))[0]
-
-    # Абстрактные sync-методы Embeddings: единственный потребитель — AsyncSqliteStore,
-    # который работает через aembed_*. Оставляем их нереализованными явно.
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise NotImplementedError("Синхронный путь не используется: store вызывает aembed_*")
-
-    def embed_query(self, text: str) -> list[float]:
-        raise NotImplementedError("Синхронный путь не используется: store вызывает aembed_*")
-
-
 def build_memory_store(conn) -> AsyncSqliteStore:
-    """Store на готовом aiosqlite-соединении с семантическим индексом.
+    """Store на готовом aiosqlite-соединении, без векторного индекса.
 
-    Соединение должно быть открыто с isolation_level=None (autocommit) —
-    store сам управляет транзакциями, иначе ловим «transaction within a transaction».
-    Расширение sqlite-vec (векторный поиск) — зависимость langgraph-checkpoint-sqlite
-    и загружается в conn внутри store.setup().
+    Семантический поиск не нужен: в памяти только предпочтения и паттерны работы
+    пользователя — они уместны в любом диалоге, поэтому инъекция просто берёт
+    последние top_k фактов. Без индекса store не требует embedding-сервис и не
+    грузит sqlite-vec. Соединение должно быть открыто с isolation_level=None
+    (autocommit) — store сам управляет транзакциями, иначе ловим
+    «transaction within a transaction».
     """
-    dims = int(os.getenv("MEMORY_EMBEDDING_DIMS", "1536"))  # размерность FRIDA
-    return AsyncSqliteStore(
-        conn,
-        index={"embed": EmbeddingServiceEmbeddings(), "dims": dims, "fields": ["text"]},
-    )
+    return AsyncSqliteStore(conn)
 
 
 def _message_text(content) -> str:
@@ -111,15 +90,6 @@ def _message_text(content) -> str:
         parts = (part.get("text", "") for part in content if isinstance(part, dict))
         return "\n".join(filter(None, (part.strip() for part in parts)))
     return ""
-
-
-def _last_user_text(messages) -> str | None:
-    """Текст последней реплики пользователя — запрос для семантического поиска."""
-    for message in reversed(messages):
-        if isinstance(message, HumanMessage):
-            text = _message_text(message.content)
-            return text or None
-    return None
 
 
 def _last_exchange(messages) -> list | None:
@@ -194,16 +164,17 @@ class MemoryInjectionMiddleware(AgentMiddleware):
         self._background_tasks: set[asyncio.Task] = set()
 
     async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
-        """Дописывает релевантные факты из store в system prompt (view-level)."""
+        """Дописывает последние факты о пользователе в system prompt (view-level)."""
         store = getattr(request.runtime, "store", None) if request.runtime is not None else None
-        query = _last_user_text(request.messages) if store is not None else None
-        if query is None:
+        if store is None:
             return await handler(request)
         try:
-            items = await store.asearch((MEMORY_NAMESPACE, _current_user_id()), query=query, limit=self.top_k)
+            items = await store.asearch((MEMORY_NAMESPACE, _current_user_id()), limit=_FACTS_SCAN_LIMIT)
         except Exception:
-            logger.warning("Память: поиск фактов не удался, продолжаем без памяти", exc_info=True)
+            logger.warning("Память: чтение фактов не удалось, продолжаем без памяти", exc_info=True)
             return await handler(request)
+        # Свежие факты важнее: сортировка по updated_at (перезаписанный факт поднимается наверх)
+        items = sorted(items, key=lambda item: item.updated_at, reverse=True)[: self.top_k]
         if not items:
             return await handler(request)
         facts = "\n".join(f"- {item.value.get('text', '').strip()}" for item in items)
@@ -238,7 +209,7 @@ class MemoryInjectionMiddleware(AgentMiddleware):
             for fact in facts:
                 # Ключ — хэш текста: повторное извлечение того же факта перезапишет запись, а не задублирует
                 key = hashlib.sha1(fact.encode("utf-8")).hexdigest()[:16]
-                await store.aput(namespace, key, {"text": fact}, index=["text"])
+                await store.aput(namespace, key, {"text": fact})
             logger.info(f"Память: сохранено фактов: {len(facts)} (user={user_id})")
         except Exception:
             logger.warning("Память: извлечение фактов не удалось", exc_info=True)

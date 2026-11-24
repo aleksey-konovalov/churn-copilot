@@ -4,8 +4,6 @@ langchain-openai==1.6.5
 langgraph==1.2.12
 # 3.1.x требует langgraph-checkpoint>=4 — совместимо с langgraph 1.2.x (но НЕ с langgraph 1.0.x)
 langgraph-checkpoint-sqlite==3.1.1
-# Векторный поиск в Store памяти (тянулся транзитивно; теперь нужен store'у явно)
-sqlite-vec==0.1.9
 aiosqlite==0.22.1
 python-dotenv==1.1.1
 httpx==0.28.1

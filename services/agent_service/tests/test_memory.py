@@ -3,7 +3,7 @@
 Запуск из корня репозитория:
     python -m pytest services/agent_service/tests/test_memory.py -q
 
-Сеть не нужна: embedding-сервис не вызывается (InMemoryStore с фейк-эмбеддингами),
+Сеть не нужна: embedding-сервис не используется (память без векторного индекса),
 LLM — фейки; store/агент собираются напрямую через create_agent.
 """
 
@@ -37,7 +37,6 @@ from core.agent import _memory_middleware, _root_middleware  # noqa: E402
 from core.memory import (  # noqa: E402
     MemoryInjectionMiddleware,
     _last_exchange,
-    _last_user_text,
     _parse_facts,
     build_memory_store,
 )
@@ -71,9 +70,9 @@ class FakeExtractor:
         return AIMessage(content=self.content)
 
 
-def _semantic_in_memory_store() -> InMemoryStore:
-    """InMemoryStore c вырожденным индексом: все векторы равны — любой запрос матчится."""
-    return InMemoryStore(index={"embed": lambda texts: [[1.0, 0.0] for _ in texts], "dims": 2, "fields": ["text"]})
+def _memory_store() -> InMemoryStore:
+    """InMemoryStore без индекса — как боевой store памяти (инъекция берёт последние факты)."""
+    return InMemoryStore()
 
 
 # === stage 3: стек middleware корневого агента ===
@@ -120,18 +119,18 @@ def test_memory_middleware_disabled_without_store():
 
 def test_memory_middleware_disabled_by_env(monkeypatch):
     monkeypatch.setenv("MEMORY_ENABLED", "false")
-    assert _memory_middleware(_semantic_in_memory_store()) is None
+    assert _memory_middleware(_memory_store()) is None
 
 
 def test_memory_middleware_created_with_store():
-    middleware = _memory_middleware(_semantic_in_memory_store())
+    middleware = _memory_middleware(_memory_store())
     assert isinstance(middleware, MemoryInjectionMiddleware)
 
 
 def test_build_memory_store_roundtrip(tmp_path):
-    """Store на реальном SQLite: setup() создаёт схему (с загрузкой sqlite-vec), put/search работают.
+    """Store на реальном SQLite: setup() создаёт схему, put/search работают.
 
-    Индексация (aput с index=) здесь не вызывается — она требует embedding-сервис.
+    Store без векторного индекса — sqlite-vec и embedding-сервис не нужны.
     """
 
     async def main():
@@ -142,7 +141,7 @@ def test_build_memory_store_roundtrip(tmp_path):
         try:
             store = build_memory_store(conn)
             await store.setup()
-            await store.aput(("memories", "u1"), "f1", {"text": "факт"}, index=False)  # index=False: без сети
+            await store.aput(("memories", "u1"), "f1", {"text": "факт"})
             return await store.asearch(("memories", "u1"), limit=5)
         finally:
             await conn.close()
@@ -156,8 +155,8 @@ def test_build_memory_store_roundtrip(tmp_path):
 
 def test_injection_adds_relevant_facts():
     async def main():
-        store = _semantic_in_memory_store()
-        await store.aput(("memories", "u1"), "f1", {"text": "Пользователь предпочитает краткие ответы"}, index=["text"])
+        store = _memory_store()
+        await store.aput(("memories", "u1"), "f1", {"text": "Пользователь предпочитает краткие ответы"})
         echo = EchoModel(sink=[])
         agent = create_agent(
             model=echo,
@@ -181,7 +180,7 @@ def test_injection_adds_relevant_facts():
 
 def test_injection_no_facts_keeps_system_prompt():
     async def main():
-        store = _semantic_in_memory_store()  # пустой store
+        store = _memory_store()  # пустой store
         echo = EchoModel(sink=[])
         agent = create_agent(
             model=echo,
@@ -225,12 +224,50 @@ def test_middleware_passthrough_without_runtime():
     assert seen[0].content == "СИСТЕМНЫЙ ПРОМПТ"
 
 
+def test_injection_takes_latest_facts_up_to_top_k():
+    """Инъекция не зависит от темы вопроса: берутся свежие факты, старые вытесняются."""
+    seen = []
+
+    async def handler(req):
+        seen.append(req.system_message)
+        return AIMessage("ok")
+
+    async def main():
+        store = _memory_store()
+        middleware = MemoryInjectionMiddleware(extract_llm=None, extraction_enabled=False, top_k=2)
+        runtime = type("R", (), {"store": store})()
+        # Прямой вызов вне запуска графа: configurable недоступен, user_id = manager_default
+        namespace = ("memories", "manager_default")
+        await store.aput(namespace, "old", {"text": "СТАРЫЙ ФАКТ"})
+        await asyncio.sleep(0.002)  # разные updated_at: сортировка по свежести должна быть устойчивой
+        await store.aput(namespace, "mid", {"text": "СРЕДНИЙ ФАКТ"})
+        await asyncio.sleep(0.002)
+        await store.aput(namespace, "new", {"text": "НОВЫЙ ФАКТ"})
+        request = ModelRequest(
+            model=None,
+            messages=[HumanMessage("разбор клиента 71")],  # вопрос про клиента — факты всё равно подставляются
+            system_message=SystemMessage(content="СИСТЕМНЫЙ ПРОМПТ"),
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            state={},
+            runtime=runtime,
+        )
+        await middleware.awrap_model_call(request, handler)
+        return seen[0].content
+
+    text = asyncio.run(main())
+    assert "СИСТЕМНЫЙ ПРОМПТ" in text
+    assert "НОВЫЙ ФАКТ" in text and "СРЕДНИЙ ФАКТ" in text
+    assert "СТАРЫЙ ФАКТ" not in text
+
+
 # === stage 5: извлечение фактов ===
 
 
 def test_aafter_agent_extracts_and_stores_in_background():
     async def main():
-        store = _semantic_in_memory_store()
+        store = _memory_store()
         middleware = MemoryInjectionMiddleware(extract_llm=FakeExtractor('["Пользователь работает с VIP-клиентами"]'))
         state = {"messages": [HumanMessage("расскажи про клиента 12"), AIMessage("отчёт готов")]}
         runtime = type("R", (), {"store": store})()
@@ -240,13 +277,13 @@ def test_aafter_agent_extracts_and_stores_in_background():
         return store
 
     store = asyncio.run(main())
-    items = asyncio.run(store.asearch(("memories", "manager_default"), query="VIP-клиенты", limit=5))
+    items = asyncio.run(store.asearch(("memories", "manager_default"), limit=5))
     assert [i.value["text"] for i in items] == ["Пользователь работает с VIP-клиентами"]
 
 
 def test_aafter_agent_skips_when_disabled_or_incomplete():
     async def main():
-        store = _semantic_in_memory_store()
+        store = _memory_store()
         middleware = MemoryInjectionMiddleware(extract_llm=FakeExtractor("[]"))
         runtime = type("R", (), {"store": store})()
 
@@ -292,7 +329,7 @@ def test_parse_facts_variants():
     assert _parse_facts(None) == []
 
 
-def test_last_user_text_and_last_exchange():
+def test_last_exchange():
     messages = [
         HumanMessage("первый вопрос"),
         AIMessage("первый ответ"),
@@ -300,8 +337,6 @@ def test_last_user_text_and_last_exchange():
         AIMessage([{"type": "text", "text": "финальный ответ"}]),
         HumanMessage("третий вопрос"),  # незавершённый обмен без ответа
     ]
-    assert _last_user_text(messages) == "третий вопрос"
-    # последний завершённый обмен — со второго вопроса
     exchange = _last_exchange(messages)
     assert exchange is None  # последний обмен не завершён — извлекать нечего
 
@@ -312,17 +347,17 @@ def test_last_user_text_and_last_exchange():
     assert _last_exchange([]) is None
 
 
-def test_fact_key_stable_and_dedup(tmp_path):
+def test_fact_key_stable_and_dedup():
     """Идемпотентность записи: тот же факт перезаписывает ту же запись store'а."""
     fact = "Пользователь просил отвечать без Markdown"
     key = hashlib.sha1(fact.encode("utf-8")).hexdigest()[:16]
 
     async def main():
-        store = _semantic_in_memory_store()
+        store = _memory_store()
         namespace = ("memories", "u1")
-        await store.aput(namespace, key, {"text": fact}, index=["text"])
-        await store.aput(namespace, key, {"text": fact}, index=["text"])
-        return await store.asearch(namespace, query="Markdown", limit=10)
+        await store.aput(namespace, key, {"text": fact})
+        await store.aput(namespace, key, {"text": fact})
+        return await store.asearch(namespace, limit=10)
 
     items = asyncio.run(main())
     assert len(items) == 1
