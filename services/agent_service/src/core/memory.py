@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -60,6 +61,8 @@ def _current_user_id() -> str:
 
     get_config() читает contextvar текущего запуска графа; вне запуска
     (фоновая задача уже стартована с захваченным user_id) не вызывается.
+    В async-прогоне графа работает только на Python ≥ 3.11 — поэтому
+    базовый образ сервиса python:3.12-slim.
     """
     try:
         configurable = get_config().get("configurable") or {}
@@ -154,6 +157,13 @@ class MemoryInjectionMiddleware(AgentMiddleware):
     """
 
     def __init__(self, extract_llm, *, top_k: int | None = None, extraction_enabled: bool | None = None):
+        if sys.version_info < (3, 11):
+            # get_config() в async-прогоне графа работает только на Python ≥ 3.11
+            # (contextvar-пропагация в asyncio-задачах); на 3.10 user_id уйдёт в дефолт
+            logger.warning(
+                "Память: Python < 3.11 — user_id из configurable недоступен в async, "
+                "факты читаются/пишутся только под DEFAULT_USER_ID"
+            )
         self.extract_llm = extract_llm
         self.top_k = top_k if top_k is not None else int(os.getenv("MEMORY_TOP_K", "5"))
         if extraction_enabled is not None:

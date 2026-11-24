@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
       # Версия ruff зафиксирована: конфиг и правила не должны «плыть» между прогонами
       - run: pip install ruff==0.17.3
       - run: ruff check .
@@ -31,7 +31,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10" # как базовый образ сервисов (python:3.10-slim)
+          # как базовый образ agent_service (python:3.12-slim): async get_config() langgraph
+          # требует Python ≥ 3.11 — на 3.10 тест памяти с user_id падает (как и прод)
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: services/agent_service/requirements.txt
       - run: pip install -e shared -r services/agent_service/requirements.txt pytest

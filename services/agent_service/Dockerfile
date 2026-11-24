@@ -1,6 +1,9 @@
 # Agent Service: REST/SSE API агента (LangGraph + SQLite checkpointer).
 # Сборка из корня репозитория: docker build -f services/agent_service/Dockerfile .
-FROM python:3.10-slim
+# Python ≥ 3.11 обязателен: langgraph get_config()/get_store() в async-прогоне графа
+# держится на contextvar-пропагации в asyncio-задачах, которая работает только на 3.11+
+# (на 3.10 user_id молча уходил в дефолт — память читала не тот namespace)
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 
