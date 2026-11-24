@@ -5,7 +5,7 @@
 testpaths = ["shared/tests", "services/agent_service/tests"]
 
 [tool.ruff]
-target-version = "py310"   # базовый образ сервисов — python:3.10-slim
+target-version = "py310"   # большинство сервисов — python:3.10-slim (agent_service один на 3.12)
 line-length = 120
 extend-exclude = ["data_science/notebooks", ".zcode"]
 
