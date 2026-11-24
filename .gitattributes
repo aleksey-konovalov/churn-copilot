@@ -1,0 +1,3 @@
+# Бейдж языка репозитория на GitHub: ноутбуки data_science учитываются как Python,
+# иначе их JSON-тяжесть выводит в карточке репо «Jupyter Notebook»
+*.ipynb linguist-language=Python
