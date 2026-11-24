@@ -1,8 +1,10 @@
 """
 Сборка агентов: корневой диалоговый + суб-агент экспертизы по удержанию.
 
-Краткосрочная память корневого агента — persistent checkpointer (SQLite).
-Инициализация — init_root_agent() при старте сервиса (вызывается из main.py).
+Краткосрочная память корневого агента — persistent checkpointer (SQLite),
+долгосрочная — Store с семантическим индексом (core/memory.py, отключается
+MEMORY_ENABLED=false). Инициализация — init_root_agent() при старте сервиса
+(вызывается из main.py).
 """
 
 import os
@@ -12,6 +14,8 @@ import aiosqlite
 import httpx
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
+    ClearToolUsesEdit,
+    ContextEditingMiddleware,
     ModelFallbackMiddleware,
     SummarizationMiddleware,
     ToolCallLimitMiddleware,
@@ -24,6 +28,7 @@ from shared.utils.logger import get_logger
 from shared.utils.text import sanitize_llm_text
 
 from .llm_client import get_llm_client, get_optional_llm_client, llm
+from .memory import MemoryInjectionMiddleware, build_memory_store
 from .prompts import (
     churn_analysis_and_retention_agent_prompt,
     churn_dialogue_summary_prompt,
@@ -89,12 +94,36 @@ async def get_churn_analysis_and_retention(query: str):
 
 
 def _root_middleware() -> list:
-    """Стек middleware корневого агента: fallback, суммаризация истории, лимит вызовов тулов."""
+    """Стек middleware корневого агента.
+
+    Порядок важен: ContextEditing стоит ДО Summarization — сначала дёшево
+    очищаются старые tool-результаты (view-level, история в state не меняется),
+    и только потом считается порог суммаризации. Если поменять местами,
+    суммаризация сжимает историю вместе с дорогими tool-результатами
+    (потеря точных цифр), а ContextEditing после неё уже не срабатывает:
+    порог на сжатой истории не достигается.
+    """
     middleware = _fallback_middleware()
+
+    # Редактирование контекста: старые tool-результаты заменяются на "[cleared]"
+    # (правило повторного запроса уже в root_agent_prompt). 0/negative — выключить.
+    trigger_tokens = int(os.getenv("CONTEXT_EDITING_TRIGGER_TOKENS", "8000"))
+    if trigger_tokens > 0:
+        middleware.append(
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=trigger_tokens,
+                        keep=int(os.getenv("CONTEXT_EDITING_KEEP_TOOL_RESULTS", "1")),
+                        clear_tool_inputs=True,
+                    )
+                ]
+            )
+        )
 
     # Порог задается в токенах и должен быть заметно меньше MAX_MODEL_LEN vLLM
     # (при 16384 — 10000, при 8192 — ~5000)
-    trigger_tokens = int(os.getenv("SUMMARIZATION_TRIGGER_TOKENS", 10000))
+    trigger_tokens = int(os.getenv("SUMMARIZATION_TRIGGER_TOKENS", "10000"))
     keep_messages = int(os.getenv("SUMMARIZATION_KEEP_MESSAGES", 8))
     middleware.append(
         SummarizationMiddleware(
@@ -111,14 +140,32 @@ def _root_middleware() -> list:
     return middleware
 
 
-def build_root_agent(checkpointer, model=None):
-    """Корневой агент с persistent-памятью. model — точка расширения для тестов."""
+def _memory_middleware(store) -> MemoryInjectionMiddleware | None:
+    """Middleware долгосрочной памяти, если она включена и передан store."""
+    enabled = os.getenv("MEMORY_ENABLED", "true").lower() in ("1", "true", "yes")
+    if store is None or not enabled:
+        return None
+    extract_llm = get_llm_client(os.getenv("MEMORY_LLM_PROFILE", SUMMARIZER_PROFILE))
+    return MemoryInjectionMiddleware(extract_llm=extract_llm)
+
+
+def build_root_agent(checkpointer, model=None, store=None):
+    """Корневой агент с persistent-памятью. model — точка расширения для тестов.
+
+    store (langgraph BaseStore) включает долгосрочную семантическую память
+    (MemoryInjectionMiddleware); без store агент работает как раньше.
+    """
+    middleware = _root_middleware()
+    memory_middleware = _memory_middleware(store)
+    if memory_middleware is not None:
+        middleware.append(memory_middleware)
     return create_agent(
         model or llm,
         tools=[get_churn_analysis_and_retention],
         system_prompt=root_agent_prompt,
-        middleware=_root_middleware(),
+        middleware=middleware,
         checkpointer=checkpointer,
+        store=store,
     )
 
 
@@ -126,33 +173,50 @@ def build_root_agent(checkpointer, model=None):
 
 root_agent = None
 _checkpointer_conn = None
+_store_conn = None
 _db_path = None
 
 
 async def init_root_agent() -> None:
-    """Открывает SQLite checkpointer и собирает root_agent.
+    """Открывает SQLite checkpointer и store памяти, собирает root_agent.
 
-    Вызывается один раз при старте сервиса: соединение aiosqlite должно жить
+    Вызывается один раз при старте сервиса: соединения aiosqlite должны жить
     в том же event loop, который обслуживает запросы.
     """
-    global root_agent, _checkpointer_conn, _db_path
+    global root_agent, _checkpointer_conn, _store_conn, _db_path
 
     db_path = os.getenv("CHECKPOINT_DB_PATH") or str(Path(__file__).resolve().parents[1] / "checkpoints.db")
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     _checkpointer_conn = await aiosqlite.connect(db_path)
     _db_path = db_path
-    root_agent = build_root_agent(AsyncSqliteSaver(_checkpointer_conn))
+
+    # Store долгосрочной памяти — отдельный файл SQLite (схема store.setup()).
+    # isolation_level=None обязателен: store сам управляет транзакциями
+    store = None
+    if os.getenv("MEMORY_ENABLED", "true").lower() in ("1", "true", "yes"):
+        memory_db_path = os.getenv("MEMORY_STORE_DB_PATH") or str(Path(__file__).resolve().parents[1] / "memory.db")
+        Path(memory_db_path).parent.mkdir(parents=True, exist_ok=True)
+        _store_conn = await aiosqlite.connect(memory_db_path, isolation_level=None)
+        store = build_memory_store(_store_conn)
+        await store.setup()
+        logger.info(f"Долгосрочная память включена (store: {memory_db_path})")
+
+    root_agent = build_root_agent(AsyncSqliteSaver(_checkpointer_conn), store=store)
     logger.info(f"root_agent готов (checkpointer: {db_path})")
 
 
 async def shutdown_root_agent() -> None:
-    """Закрывает соединение checkpointer'а при остановке сервиса."""
-    global root_agent, _checkpointer_conn, _db_path
+    """Закрывает соединения checkpointer'а и store'а памяти при остановке сервиса."""
+    global root_agent, _checkpointer_conn, _store_conn, _db_path
     if _checkpointer_conn is not None:
         await _checkpointer_conn.close()
         logger.info("Соединение checkpointer'а закрыто")
+    if _store_conn is not None:
+        await _store_conn.close()
+        logger.info("Соединение store'а памяти закрыто")
     _checkpointer_conn = None
+    _store_conn = None
     _db_path = None
     root_agent = None
 

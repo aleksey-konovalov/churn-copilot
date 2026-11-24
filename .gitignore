@@ -10,8 +10,9 @@ app-cache/
 *.csv
 *.cbm
 
-# Agent service: persistent память (SQLite checkpointer)
+# Agent service: persistent память (SQLite checkpointer + store фактов)
 services/agent_service/**/checkpoints.db*
+services/agent_service/**/memory.db*
 services/agent_service/**/clients.db*
 
 # Qdrant
